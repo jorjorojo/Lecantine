@@ -4,6 +4,7 @@ import base64
 import datetime as dt
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -17,23 +18,36 @@ def make_headers(user: str, password: str) -> dict:
     return headers
 
 
-def call(base: str, headers: dict, method: str, path: str, payload=None):
+def call(base: str, headers: dict, method: str, path: str, payload=None, retries: int = 6):
     body = None
     if payload is not None:
         body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(base + path, data=body, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
+    last_error = None
+    for attempt in range(retries):
+        req = urllib.request.Request(base + path, data=body, method=method, headers=headers)
         try:
-            parsed = json.loads(raw)
-            message = parsed.get("error") or raw
-        except Exception:
-            message = raw
-        raise RuntimeError(f"HTTP {exc.code} {method} {path}: {message}") from exc
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            if exc.code in {502, 503, 504} and attempt < retries - 1:
+                time.sleep(0.4 * (attempt + 1))
+                last_error = f"HTTP {exc.code} {method} {path}: {raw}"
+                continue
+            try:
+                parsed = json.loads(raw)
+                message = parsed.get("error") or raw
+            except Exception:
+                message = raw
+            raise RuntimeError(f"HTTP {exc.code} {method} {path}: {message}") from exc
+        except urllib.error.URLError as exc:
+            last_error = str(exc)
+            if attempt < retries - 1:
+                time.sleep(0.4 * (attempt + 1))
+                continue
+            raise RuntimeError(f"URL error {method} {path}: {last_error}") from exc
+    raise RuntimeError(f"Request failed {method} {path}: {last_error}")
 
 
 def main():
