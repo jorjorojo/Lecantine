@@ -120,6 +120,34 @@ def run_vertical_flow(base_url: str):
     )
     assert new_order["id"] > 0, "No se creó pedido"
     assert new_order["date"] == health["date"], "El pedido no cae en la fecha operativa actual (timezone mismatch)"
+    updated_order = request_json(
+        base_url,
+        "PUT",
+        f"/api/orders/{new_order['id']}",
+        {
+            "studentId": new_student["id"],
+            "cart": [{"productId": 1, "qty": 1}, {"productId": 37, "qty": 1}],
+            "time": "10:20",
+        },
+    )
+    assert updated_order["id"] == new_order["id"], "No se actualizó pedido"
+    assert round(updated_order["total"], 2) == 78.0, "Total de pedido editado inválido"
+
+    updated_student = request_json(
+        base_url,
+        "PUT",
+        f"/api/students/{new_student['id']}",
+        {
+            "name": "Alumno Prueba Editado",
+            "grade": "2°B",
+            "emoji": "🧒",
+            "paymentType": "cole",
+            "familyId": None,
+            "initialBalance": 15,
+        },
+    )
+    assert updated_student["name"] == "Alumno Prueba Editado", "No se actualizó alumno"
+    assert round(updated_student["initialBalance"], 2) == 15.0, "Saldo inicial editado inválido"
 
     payment = request_json(
         base_url,

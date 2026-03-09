@@ -9,7 +9,8 @@ import sqlite3
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from typing import Optional
+from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -317,6 +318,32 @@ def validate_time_hhmm(value: str, field_name: str) -> str:
     return value
 
 
+def normalize_cart(cart: list) -> tuple[list, float]:
+    if not isinstance(cart, list) or len(cart) == 0:
+        raise ValueError("El carrito está vacío.")
+
+    normalized_items = []
+    total = 0.0
+    for item in cart:
+        if not isinstance(item, dict):
+            raise ValueError("Item inválido en carrito.")
+        product_id = item.get("productId")
+        qty = item.get("qty")
+        if not isinstance(product_id, int) or product_id not in PRODUCTS:
+            raise ValueError(f"Producto inválido: {product_id}")
+        if not isinstance(qty, int) or qty <= 0:
+            raise ValueError("Cantidad inválida.")
+        unit_price = float(PRODUCTS[product_id]["price"])
+        normalized_items.append({"productId": product_id, "qty": qty, "unitPrice": unit_price})
+        total += unit_price * qty
+
+    return normalized_items, round(total, 2)
+
+
+def student_family_key(student_id: int, family_id: Optional[str]) -> str:
+    return family_id or f"ind-{student_id}"
+
+
 class CafeteriaHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT_DIR), **kwargs)
@@ -406,6 +433,29 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
         except Exception:
             self.send_json(500, {"error": "Error interno del servidor."})
 
+    def do_PUT(self):
+        if not self.require_auth():
+            return
+        parsed = urlparse(self.path)
+        try:
+            match = re.fullmatch(r"/api/orders/(\d+)", parsed.path)
+            if match:
+                order_id = int(match.group(1))
+                return self.handle_update_order(order_id)
+
+            match = re.fullmatch(r"/api/students/(\d+)", parsed.path)
+            if match:
+                student_id = int(match.group(1))
+                return self.handle_update_student(student_id)
+
+            self.send_json(404, {"error": "Ruta no encontrada."})
+        except ValueError as exc:
+            self.send_json(400, {"error": str(exc)})
+        except sqlite3.IntegrityError as exc:
+            self.send_json(400, {"error": f"Error de integridad de datos: {exc}"})
+        except Exception:
+            self.send_json(500, {"error": "Error interno del servidor."})
+
     def do_DELETE(self):
         if not self.require_auth():
             return
@@ -415,6 +465,19 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
             if match:
                 order_id = int(match.group(1))
                 return self.handle_delete_order(order_id)
+
+            match = re.fullmatch(r"/api/students/(\d+)", parsed.path)
+            if match:
+                student_id = int(match.group(1))
+                query = parse_qs(parsed.query or "")
+                reassign_to_raw = query.get("reassignTo", [None])[0]
+                purge_orders_raw = str(query.get("purgeOrders", ["0"])[0]).strip().lower()
+                purge_orders = purge_orders_raw in {"1", "true", "yes", "y"}
+                reassign_to = None
+                if reassign_to_raw is not None and str(reassign_to_raw).strip():
+                    reassign_to = int(str(reassign_to_raw).strip())
+                return self.handle_delete_student(student_id, reassign_to=reassign_to, purge_orders=purge_orders)
+
             self.send_json(404, {"error": "Ruta no encontrada."})
         except ValueError as exc:
             self.send_json(400, {"error": str(exc)})
@@ -430,23 +493,7 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
 
         if not isinstance(student_id, int) or student_id <= 0:
             raise ValueError("studentId inválido.")
-        if not isinstance(cart, list) or len(cart) == 0:
-            raise ValueError("El carrito está vacío.")
-
-        normalized_items = []
-        total = 0.0
-        for item in cart:
-            if not isinstance(item, dict):
-                raise ValueError("Item inválido en carrito.")
-            product_id = item.get("productId")
-            qty = item.get("qty")
-            if not isinstance(product_id, int) or product_id not in PRODUCTS:
-                raise ValueError(f"Producto inválido: {product_id}")
-            if not isinstance(qty, int) or qty <= 0:
-                raise ValueError("Cantidad inválida.")
-            unit_price = float(PRODUCTS[product_id]["price"])
-            normalized_items.append({"productId": product_id, "qty": qty, "unitPrice": unit_price})
-            total += unit_price * qty
+        normalized_items, total = normalize_cart(cart)
 
         order_date = validate_iso_date(str(requested_date), "Fecha") if requested_date is not None else local_date()
         order_time = validate_time_hhmm(str(requested_time), "Hora") if requested_time is not None else local_time()
@@ -483,7 +530,95 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 "date": order_date,
                 "time": order_time,
                 "items": normalized_items,
-                "total": round(total, 2),
+                "total": total,
+            },
+        )
+
+    def handle_update_order(self, order_id: int):
+        if order_id <= 0:
+            raise ValueError("orderId inválido.")
+
+        payload = self.read_json_body()
+        if not isinstance(payload, dict) or len(payload) == 0:
+            raise ValueError("Se requiere al menos un campo para editar el pedido.")
+
+        with WRITE_LOCK:
+            with db_connection() as conn:
+                current_order = conn.execute(
+                    """
+                    SELECT id, student_id, order_date, order_time, total
+                    FROM orders
+                    WHERE id = ?
+                    """,
+                    (order_id,),
+                ).fetchone()
+                if not current_order:
+                    self.send_json(404, {"error": "Pedido no encontrado."})
+                    return
+
+                student_id = payload.get("studentId", current_order["student_id"])
+                if not isinstance(student_id, int) or student_id <= 0:
+                    raise ValueError("studentId inválido.")
+                student_exists = conn.execute("SELECT 1 FROM students WHERE id = ?", (student_id,)).fetchone()
+                if not student_exists:
+                    raise ValueError("El alumno seleccionado no existe.")
+
+                if "date" in payload:
+                    order_date = validate_iso_date(str(payload.get("date")), "Fecha")
+                else:
+                    order_date = current_order["order_date"]
+
+                if "time" in payload:
+                    order_time = validate_time_hhmm(str(payload.get("time")), "Hora")
+                else:
+                    order_time = current_order["order_time"]
+
+                if "cart" in payload:
+                    normalized_items, total = normalize_cart(payload.get("cart"))
+                    conn.execute("DELETE FROM order_items WHERE order_id = ?", (order_id,))
+                    conn.executemany(
+                        """
+                        INSERT INTO order_items (order_id, product_id, qty, unit_price)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        [(order_id, i["productId"], i["qty"], i["unitPrice"]) for i in normalized_items],
+                    )
+                else:
+                    total = round(float(current_order["total"]), 2)
+                    current_items = conn.execute(
+                        """
+                        SELECT product_id, qty, unit_price
+                        FROM order_items
+                        WHERE order_id = ?
+                        ORDER BY id ASC
+                        """,
+                        (order_id,),
+                    ).fetchall()
+                    normalized_items = [
+                        {"productId": r["product_id"], "qty": r["qty"], "unitPrice": float(r["unit_price"])}
+                        for r in current_items
+                    ]
+
+                conn.execute(
+                    """
+                    UPDATE orders
+                    SET student_id = ?, order_date = ?, order_time = ?, total = ?
+                    WHERE id = ?
+                    """,
+                    (student_id, order_date, order_time, total, order_id),
+                )
+                conn.commit()
+            maybe_hourly_backup()
+
+        self.send_json(
+            200,
+            {
+                "id": order_id,
+                "studentId": student_id,
+                "date": order_date,
+                "time": order_time,
+                "items": normalized_items,
+                "total": total,
             },
         )
 
@@ -549,6 +684,235 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 "initialBalance": round(initial_balance, 2),
             },
         )
+
+    def handle_update_student(self, student_id: int):
+        if student_id <= 0:
+            raise ValueError("studentId inválido.")
+
+        payload = self.read_json_body()
+        if not isinstance(payload, dict) or len(payload) == 0:
+            raise ValueError("Se requiere al menos un campo para editar el alumno.")
+
+        with WRITE_LOCK:
+            with db_connection() as conn:
+                current = conn.execute(
+                    """
+                    SELECT id, name, grade, emoji, payment_type, family_id, initial_balance
+                    FROM students
+                    WHERE id = ?
+                    """,
+                    (student_id,),
+                ).fetchone()
+                if not current:
+                    self.send_json(404, {"error": "Alumno no encontrado."})
+                    return
+
+                old_family_id = current["family_id"]
+                old_key = student_family_key(student_id, old_family_id)
+
+                if "name" in payload:
+                    name = str(payload.get("name", "")).strip()
+                else:
+                    name = current["name"]
+                if not name:
+                    raise ValueError("El nombre es obligatorio.")
+
+                if "grade" in payload:
+                    grade = str(payload.get("grade", "")).strip()
+                else:
+                    grade = current["grade"]
+                if not grade:
+                    raise ValueError("El grado es obligatorio.")
+
+                if "emoji" in payload:
+                    emoji = str(payload.get("emoji", "👦")).strip() or "👦"
+                else:
+                    emoji = current["emoji"]
+
+                if "paymentType" in payload:
+                    payment_type = str(payload.get("paymentType", "")).strip()
+                else:
+                    payment_type = current["payment_type"]
+                if payment_type not in {"transfer", "cole"}:
+                    raise ValueError("Tipo de pago inválido.")
+
+                if "familyId" in payload:
+                    family_id = payload.get("familyId")
+                    if family_id is not None:
+                        family_id = str(family_id).strip() or None
+                else:
+                    family_id = current["family_id"]
+
+                if "initialBalance" in payload:
+                    raw_initial_balance = payload.get("initialBalance", 0)
+                    try:
+                        initial_balance = float(raw_initial_balance)
+                    except (TypeError, ValueError):
+                        raise ValueError("Saldo inicial inválido.")
+                else:
+                    initial_balance = float(current["initial_balance"])
+
+                conn.execute(
+                    """
+                    UPDATE students
+                    SET name = ?, grade = ?, emoji = ?, payment_type = ?, family_id = ?, initial_balance = ?
+                    WHERE id = ?
+                    """,
+                    (name, grade, emoji, payment_type, family_id, initial_balance, student_id),
+                )
+
+                new_key = student_family_key(student_id, family_id)
+                if old_key != new_key:
+                    # Safe migration: from individual key to any other key.
+                    if old_family_id is None:
+                        conn.execute(
+                            """
+                            UPDATE payments
+                            SET family_key = ?
+                            WHERE family_key = ?
+                            """,
+                            (new_key, old_key),
+                        )
+                    else:
+                        other_members = conn.execute(
+                            """
+                            SELECT COUNT(*) AS c
+                            FROM students
+                            WHERE family_id = ? AND id != ?
+                            """,
+                            (old_family_id, student_id),
+                        ).fetchone()["c"]
+                        if other_members == 0:
+                            conn.execute(
+                                """
+                                UPDATE payments
+                                SET family_key = ?
+                                WHERE family_key = ?
+                                """,
+                                (new_key, old_family_id),
+                            )
+
+                conn.commit()
+            maybe_hourly_backup()
+
+        self.send_json(
+            200,
+            {
+                "id": student_id,
+                "name": name,
+                "grade": grade,
+                "emoji": emoji,
+                "paymentType": payment_type,
+                "familyId": family_id,
+                "initialBalance": round(initial_balance, 2),
+            },
+        )
+
+    def handle_delete_student(self, student_id: int, reassign_to: Optional[int] = None, purge_orders: bool = False):
+        if student_id <= 0:
+            raise ValueError("studentId inválido.")
+        if reassign_to is not None and reassign_to <= 0:
+            raise ValueError("reassignTo inválido.")
+        if reassign_to is not None and reassign_to == student_id:
+            raise ValueError("No puedes reasignar al mismo alumno.")
+
+        with WRITE_LOCK:
+            with db_connection() as conn:
+                source = conn.execute(
+                    """
+                    SELECT id, family_id
+                    FROM students
+                    WHERE id = ?
+                    """,
+                    (student_id,),
+                ).fetchone()
+                if not source:
+                    self.send_json(404, {"error": "Alumno no encontrado."})
+                    return
+
+                target = None
+                if reassign_to is not None:
+                    target = conn.execute(
+                        """
+                        SELECT id, family_id
+                        FROM students
+                        WHERE id = ?
+                        """,
+                        (reassign_to,),
+                    ).fetchone()
+                    if not target:
+                        raise ValueError("El alumno destino para reassignTo no existe.")
+
+                source_key = student_family_key(student_id, source["family_id"])
+                orders_count = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c
+                    FROM orders
+                    WHERE student_id = ?
+                    """,
+                    (student_id,),
+                ).fetchone()["c"]
+                payments_count = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c
+                    FROM payments
+                    WHERE family_key = ?
+                    """,
+                    (source_key,),
+                ).fetchone()["c"]
+
+                if orders_count > 0:
+                    if target is not None:
+                        conn.execute(
+                            """
+                            UPDATE orders
+                            SET student_id = ?
+                            WHERE student_id = ?
+                            """,
+                            (target["id"], student_id),
+                        )
+                    elif purge_orders:
+                        conn.execute(
+                            """
+                            DELETE FROM orders
+                            WHERE student_id = ?
+                            """,
+                            (student_id,),
+                        )
+                    else:
+                        raise ValueError(
+                            f"El alumno tiene {orders_count} pedido(s). Usa reassignTo=<id> o purgeOrders=1 para eliminar."
+                        )
+
+                if payments_count > 0 and source["family_id"] is None:
+                    if target is not None:
+                        target_key = student_family_key(target["id"], target["family_id"])
+                        conn.execute(
+                            """
+                            UPDATE payments
+                            SET family_key = ?
+                            WHERE family_key = ?
+                            """,
+                            (target_key, source_key),
+                        )
+                    elif purge_orders:
+                        conn.execute(
+                            """
+                            DELETE FROM payments
+                            WHERE family_key = ?
+                            """,
+                            (source_key,),
+                        )
+                    else:
+                        raise ValueError(
+                            f"El alumno tiene {payments_count} pago(s) individuales. Usa reassignTo=<id> o purgeOrders=1."
+                        )
+
+                conn.execute("DELETE FROM students WHERE id = ?", (student_id,))
+                conn.commit()
+            maybe_hourly_backup()
+
+        self.send_json(200, {"ok": True})
 
     def handle_create_payment(self):
         payload = self.read_json_body()

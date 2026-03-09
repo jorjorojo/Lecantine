@@ -158,9 +158,9 @@ const getWeekRange = (date) => {
   const diffToMon = day === 0 ? -6 : 1 - day;
   const mon = new Date(d);
   mon.setDate(d.getDate() + diffToMon);
-  const fri = new Date(mon);
-  fri.setDate(mon.getDate() + 4);
-  return { start: toLocalDateStr(mon), end: toLocalDateStr(fri) };
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+  return { start: toLocalDateStr(mon), end: toLocalDateStr(sun) };
 };
 
 const getMonthRange = (year, month) => {
@@ -194,6 +194,10 @@ const api = {
     method: 'POST',
     body: JSON.stringify({ studentId, cart }),
   }),
+  updateOrder: (orderId, payload) => apiRequest(`/api/orders/${orderId}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  }),
   deleteOrder: (orderId) => apiRequest(`/api/orders/${orderId}`, { method: 'DELETE' }),
   createPayment: (payment) => apiRequest('/api/payments', {
     method: 'POST',
@@ -203,6 +207,17 @@ const api = {
     method: 'POST',
     body: JSON.stringify(student),
   }),
+  updateStudent: (studentId, payload) => apiRequest(`/api/students/${studentId}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  }),
+  deleteStudent: (studentId, { reassignTo = null, purgeOrders = false } = {}) => {
+    const params = new URLSearchParams();
+    if (reassignTo != null) params.set('reassignTo', String(reassignTo));
+    if (purgeOrders) params.set('purgeOrders', '1');
+    const qs = params.toString();
+    return apiRequest(`/api/students/${studentId}${qs ? `?${qs}` : ''}`, { method: 'DELETE' });
+  },
 };
 
 // ─── Cart Logic ───
@@ -633,25 +648,53 @@ function CartSummary({ cart, studentId, students, onConfirm, onClear }) {
 }
 
 // ─── New Order View ───
-function NewOrderView({ orders, setOrders, students, payments }) {
+function NewOrderView({ orders, setOrders, students, payments, editingOrder, onFinishEdit }) {
   const [studentId, setStudentId] = useState(null);
   const [cart, setCart] = useState([]);
   const [toast, setToast] = useState(null);
   const [filterType, setFilterType] = useState('transfer');
 
+  useEffect(() => {
+    if (!editingOrder) return;
+    setStudentId(editingOrder.studentId || null);
+    setCart((editingOrder.items || []).map(i => ({ productId: i.productId, qty: i.qty })));
+    const selectedStudent = students.find(s => s.id === editingOrder.studentId);
+    if (selectedStudent?.paymentType) setFilterType(selectedStudent.paymentType);
+  }, [editingOrder, students]);
+
   const handleFilterChange = (type) => { setFilterType(type); setStudentId(null); setCart([]); };
+  const cancelEdit = () => {
+    setStudentId(null);
+    setCart([]);
+    if (onFinishEdit) onFinishEdit();
+  };
 
   const confirm = async () => {
     if (!studentId || cart.length === 0) return;
     try {
-      const newOrder = await api.createOrder(studentId, cart);
-      setOrders(prev => [...prev, newOrder]);
-      const student = students.find(s => s.id === studentId);
-      setToast(`Pedido de ${student?.name || 'Alumno'} registrado (${fmt(newOrder.total)})`);
-      setCart([]);
+      if (editingOrder) {
+        const updatedOrder = await api.updateOrder(editingOrder.id, {
+          studentId,
+          cart,
+          date: editingOrder.date,
+          time: editingOrder.time,
+        });
+        setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
+        const student = students.find(s => s.id === studentId);
+        setToast(`Pedido de ${student?.name || 'Alumno'} actualizado (${fmt(updatedOrder.total)})`);
+        setCart([]);
+        setStudentId(null);
+        if (onFinishEdit) onFinishEdit();
+      } else {
+        const newOrder = await api.createOrder(studentId, cart);
+        setOrders(prev => [...prev, newOrder]);
+        const student = students.find(s => s.id === studentId);
+        setToast(`Pedido de ${student?.name || 'Alumno'} registrado (${fmt(newOrder.total)})`);
+        setCart([]);
+      }
       setTimeout(() => setToast(null), 3000);
     } catch (err) {
-      alert(`No se pudo registrar el pedido: ${err.message}`);
+      alert(`No se pudo guardar el pedido: ${err.message}`);
     }
   };
 
@@ -664,17 +707,30 @@ function NewOrderView({ orders, setOrders, students, payments }) {
           borderRadius: 12, fontWeight: 700, fontSize: 14, zIndex: 200, boxShadow: 'var(--shadow-lg)',
         }}>✓ {toast}</div>
       )}
+      {editingOrder && (
+        <div style={{
+          background: 'var(--accent-light)', borderRadius: 12, padding: '10px 12px', marginBottom: 12,
+          border: '1px solid var(--accent)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+        }}>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>✏️ Editando pedido #{editingOrder.id} ({formatDateShort(editingOrder.date)})</span>
+          <button onClick={cancelEdit} style={{
+            border: '1px solid var(--border)', background: 'var(--card)', borderRadius: 8,
+            padding: '6px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer', color: 'var(--text-light)',
+          }}>Cancelar</button>
+        </div>
+      )}
       <StudentPicker selected={studentId} onSelect={setStudentId} students={students}
         allStudents={students} orders={orders} payments={payments}
         filterType={filterType} onFilterChange={handleFilterChange} />
       {studentId && <div style={{ marginTop: 20 }}><MenuSection cart={cart} setCart={setCart} /></div>}
-      <CartSummary cart={cart} studentId={studentId} students={students} onConfirm={confirm} onClear={() => setCart([])} />
+      <CartSummary cart={cart} studentId={studentId} students={students} onConfirm={confirm}
+        onClear={editingOrder ? cancelEdit : () => setCart([])} />
     </div>
   );
 }
 
 // ─── Today View ───
-function TodayView({ orders, setOrders, students }) {
+function TodayView({ orders, setOrders, students, onEditOrder }) {
   const today = getToday();
   const todayOrders = orders.filter(o => o.date === today);
   const dayTotal = todayOrders.reduce((s, o) => s + o.total, 0);
@@ -731,6 +787,10 @@ function TodayView({ orders, setOrders, students }) {
                     <span style={{ fontSize: 12, color: 'var(--text-light)', fontWeight: 600 }}>🕐 {o.time}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--primary)' }}>{fmt(o.total)}</span>
+                      <button onClick={() => onEditOrder && onEditOrder(o)} style={{
+                        background: 'none', border: 'none', cursor: 'pointer', fontSize: 16,
+                        color: 'var(--primary)', padding: '2px 4px',
+                      }} title="Editar">✏️</button>
                       <button onClick={() => deleteOrder(o.id)} style={{
                         background: 'none', border: 'none', cursor: 'pointer', fontSize: 16,
                         color: 'var(--danger)', padding: '2px 4px',
@@ -889,8 +949,9 @@ function StatementView({ orders, students, payments, setPayments }) {
   const activeFamilyKeys = Object.keys(familyGroups).filter(fk => {
     const members = familyGroups[fk];
     const hasOrders = periodOrders.some(o => members.some(m => m.id === o.studentId));
+    const hasPeriodPayments = computePeriodPayments(fk, payments, period.start, period.end).length > 0;
     const balance = computeBalance(fk, students, orders, payments);
-    return hasOrders || balance !== 0;
+    return hasOrders || hasPeriodPayments || balance !== 0;
   });
 
   const periodTotal = activeFamilyKeys.reduce((sum, fk) => {
@@ -1241,26 +1302,81 @@ function RegisterView({ students, setStudents }) {
   const [familyId, setFamilyId] = useState('');
   const [emoji, setEmoji] = useState('👦');
   const [initialBalance, setInitialBalance] = useState('');
+  const [editingStudentId, setEditingStudentId] = useState(null);
   const [toast, setToast] = useState(null);
 
   const existingFamilies = [...new Set(students.filter(s => s.familyId).map(s => s.familyId))];
+  const clearForm = () => {
+    setName('');
+    setGrade('');
+    setPaymentType('transfer');
+    setFamilyId('');
+    setEmoji('👦');
+    setInitialBalance('');
+    setEditingStudentId(null);
+  };
+
+  const startEdit = (student) => {
+    setEditingStudentId(student.id);
+    setName(student.name || '');
+    setGrade(student.grade || '');
+    setPaymentType(student.paymentType || 'transfer');
+    setFamilyId(student.familyId || '');
+    setEmoji(student.emoji || '👦');
+    setInitialBalance(String(student.initialBalance ?? 0));
+  };
+
+  const handleDeleteStudent = async (student) => {
+    if (!confirm(`¿Eliminar a ${student.name}?`)) return;
+    try {
+      await api.deleteStudent(student.id);
+      setStudents(prev => prev.filter(s => s.id !== student.id));
+      if (editingStudentId === student.id) clearForm();
+      setToast(`${student.name} eliminado`);
+      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      const msg = err.message || 'No se pudo eliminar el alumno';
+      const isMovementConflict = msg.includes('pedido') || msg.includes('pago');
+      if (!isMovementConflict) {
+        alert(`No se pudo eliminar el alumno: ${msg}`);
+        return;
+      }
+      const force = confirm(`${msg}\n\n¿Forzar eliminación y borrar movimientos individuales de este alumno?`);
+      if (!force) return;
+      try {
+        await api.deleteStudent(student.id, { purgeOrders: true });
+        setStudents(prev => prev.filter(s => s.id !== student.id));
+        if (editingStudentId === student.id) clearForm();
+        setToast(`${student.name} eliminado con movimientos`);
+        setTimeout(() => setToast(null), 3000);
+      } catch (err2) {
+        alert(`No se pudo eliminar el alumno: ${err2.message}`);
+      }
+    }
+  };
 
   const handleSubmit = async () => {
     if (!name.trim() || !grade.trim()) return;
     const bal = parseFloat(initialBalance) || 0;
-    const newStudentPayload = {
+    const studentPayload = {
       name: name.trim(), grade: grade.trim(), emoji, paymentType,
       familyId: familyId.trim() || null,
       initialBalance: bal,
     };
     try {
-      const newStudent = await api.createStudent(newStudentPayload);
-      setStudents(prev => [...prev, newStudent]);
-      setToast(`${newStudent.name} registrado como ${paymentType === 'transfer' ? 'Transfer' : 'Cole'}`);
-      setName(''); setGrade(''); setFamilyId(''); setInitialBalance('');
+      if (editingStudentId) {
+        const updatedStudent = await api.updateStudent(editingStudentId, studentPayload);
+        setStudents(prev => prev.map(s => s.id === updatedStudent.id ? updatedStudent : s));
+        setToast(`${updatedStudent.name} actualizado`);
+      } else {
+        const newStudent = await api.createStudent(studentPayload);
+        setStudents(prev => [...prev, newStudent]);
+        setToast(`${newStudent.name} registrado como ${paymentType === 'transfer' ? 'Transfer' : 'Cole'}`);
+      }
+      clearForm();
       setTimeout(() => setToast(null), 3000);
     } catch (err) {
-      alert(`No se pudo registrar el alumno: ${err.message}`);
+      alert(`No se pudo guardar el alumno: ${err.message}`);
     }
   };
 
@@ -1279,7 +1395,9 @@ function RegisterView({ students, setStudents }) {
           borderRadius: 12, fontWeight: 700, fontSize: 14, zIndex: 200, boxShadow: 'var(--shadow-lg)',
         }}>✓ {toast}</div>
       )}
-      <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 20 }}>👤 Alta de Alumno</h2>
+      <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 20 }}>
+        {editingStudentId ? '✏️ Editar Alumno' : '👤 Alta de Alumno'}
+      </h2>
       <div style={{
         background: 'var(--card)', borderRadius: 14, padding: 20,
         border: '1px solid var(--border)', boxShadow: 'var(--shadow)', maxWidth: 480,
@@ -1328,13 +1446,21 @@ function RegisterView({ students, setStudents }) {
           <input type="number" value={initialBalance} onChange={e => setInitialBalance(e.target.value)} placeholder="0" style={inputStyle}
             onFocus={e => e.target.style.borderColor = 'var(--primary)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
         </div>
-        <button onClick={handleSubmit} disabled={!name.trim() || !grade.trim()} style={{
-          width: '100%', padding: '14px', borderRadius: 12, border: 'none',
-          background: name.trim() && grade.trim() ? 'var(--secondary)' : 'var(--border)',
-          color: '#fff', fontWeight: 800, fontSize: 15,
-          cursor: name.trim() && grade.trim() ? 'pointer' : 'not-allowed',
-          boxShadow: name.trim() && grade.trim() ? '0 4px 12px rgba(45,106,79,0.3)' : 'none',
-        }}>✓ Registrar Alumno</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {editingStudentId && (
+            <button onClick={clearForm} style={{
+              width: '36%', padding: '14px', borderRadius: 12, border: '2px solid var(--border)',
+              background: 'var(--card)', color: 'var(--text-light)', fontWeight: 800, fontSize: 14, cursor: 'pointer',
+            }}>Cancelar</button>
+          )}
+          <button onClick={handleSubmit} disabled={!name.trim() || !grade.trim()} style={{
+            width: editingStudentId ? '64%' : '100%', padding: '14px', borderRadius: 12, border: 'none',
+            background: name.trim() && grade.trim() ? 'var(--secondary)' : 'var(--border)',
+            color: '#fff', fontWeight: 800, fontSize: 15,
+            cursor: name.trim() && grade.trim() ? 'pointer' : 'not-allowed',
+            boxShadow: name.trim() && grade.trim() ? '0 4px 12px rgba(45,106,79,0.3)' : 'none',
+          }}>{editingStudentId ? '✓ Guardar Cambios' : '✓ Registrar Alumno'}</button>
+        </div>
       </div>
 
       <h3 style={{ fontSize: 15, fontWeight: 800, marginTop: 28, marginBottom: 12 }}>
@@ -1344,7 +1470,8 @@ function RegisterView({ students, setStudents }) {
         {students.map(s => (
           <div key={s.id} style={{
             background: 'var(--card)', borderRadius: 10, padding: '10px 12px',
-            border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
+            border: editingStudentId === s.id ? '2px solid var(--primary)' : '1px solid var(--border)',
+            display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
           }}>
             <span style={{ fontSize: 20 }}>{s.emoji}</span>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -1353,6 +1480,14 @@ function RegisterView({ students, setStudents }) {
                 {s.grade} · {s.paymentType === 'transfer' ? '💳' : '🏫'}
                 {s.familyId && ` · ${s.familyId}`}
               </div>
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button onClick={() => startEdit(s)} style={{
+                background: 'none', border: 'none', cursor: 'pointer', fontSize: 15, color: 'var(--primary)', padding: '2px 4px',
+              }} title="Editar">✏️</button>
+              <button onClick={() => handleDeleteStudent(s)} style={{
+                background: 'none', border: 'none', cursor: 'pointer', fontSize: 15, color: 'var(--danger)', padding: '2px 4px',
+              }} title="Eliminar">🗑️</button>
             </div>
           </div>
         ))}
@@ -1370,6 +1505,7 @@ function App() {
   const [orders, setOrders] = useState([]);
   const [students, setStudents] = useState([]);
   const [payments, setPayments] = useState([]);
+  const [editingOrder, setEditingOrder] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
@@ -1391,6 +1527,14 @@ function App() {
   useEffect(() => { loadState(); }, [loadState]);
 
   const todayCartCount = useMemo(() => orders.filter(o => o.date === getToday()).length, [orders]);
+  const changeView = (nextView) => {
+    setView(nextView);
+    if (nextView !== 'order') setEditingOrder(null);
+  };
+  const startOrderEdit = (order) => {
+    setEditingOrder(order);
+    setView('order');
+  };
 
   if (isLoading) {
     return (
@@ -1416,11 +1560,20 @@ function App() {
 
   return (
     <div>
-      <Header view={view} setView={setView} orderCount={todayCartCount} />
+      <Header view={view} setView={changeView} orderCount={todayCartCount} />
       <main style={{ maxWidth: 960, margin: '0 auto', padding: '20px 16px' }}>
         {view === 'register' && <RegisterView students={students} setStudents={setStudents} />}
-        {view === 'order' && <NewOrderView orders={orders} setOrders={setOrders} students={students} payments={payments} />}
-        {view === 'today' && <TodayView orders={orders} setOrders={setOrders} students={students} />}
+        {view === 'order' && (
+          <NewOrderView
+            orders={orders}
+            setOrders={setOrders}
+            students={students}
+            payments={payments}
+            editingOrder={editingOrder}
+            onFinishEdit={() => setEditingOrder(null)}
+          />
+        )}
+        {view === 'today' && <TodayView orders={orders} setOrders={setOrders} students={students} onEditOrder={startOrderEdit} />}
         {view === 'statement' && <StatementView orders={orders} students={students} payments={payments} setPayments={setPayments} />}
       </main>
     </div>
