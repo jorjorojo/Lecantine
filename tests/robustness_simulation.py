@@ -45,6 +45,21 @@ def request_json(base_url: str, method: str, path: str, payload=None, timeout=20
     raise RuntimeError(f"Request failed {method} {path}: {last_exc}")
 
 
+def request_text(base_url: str, method: str, path: str, timeout=20, retries=3):
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url=f"{base_url}{path}", method=method)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+            last_exc = exc
+            if attempt == retries - 1:
+                break
+            time.sleep(0.2 * (attempt + 1))
+    raise RuntimeError(f"Request failed {method} {path}: {last_exc}")
+
+
 def wait_for_health(base_url: str, timeout_s: int = 15):
     start = time.time()
     while time.time() - start < timeout_s:
@@ -189,6 +204,14 @@ def run_vertical_flow(base_url: str):
     )
     deleted_payment = request_json(base_url, "DELETE", f"/api/payments/{payment_to_delete['id']}")
     assert deleted_payment.get("ok") is True, "No se eliminó pago"
+
+    csv_text = request_text(
+        base_url,
+        "GET",
+        f"/api/export.csv?start={health['date']}&end={health['date']}&paymentType=cole",
+    )
+    assert "family_key" in csv_text and "period_start" in csv_text, "Export CSV inválido"
+    assert "Alumno Prueba Editado" in csv_text, "Export CSV no contiene alumno esperado"
 
     deleted = request_json(base_url, "DELETE", f"/api/orders/{new_order['id']}")
     assert deleted.get("ok") is True, "No se eliminó pedido"

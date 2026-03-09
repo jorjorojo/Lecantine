@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import base64
+import csv
 import datetime as dt
+import io
 import json
 import os
 import re
@@ -344,6 +346,116 @@ def student_family_key(student_id: int, family_id: Optional[str]) -> str:
     return family_id or f"ind-{student_id}"
 
 
+def week_range_from_date(date_value: dt.date) -> tuple[str, str]:
+    # Monday (0) to Sunday (6)
+    monday = date_value - dt.timedelta(days=date_value.weekday())
+    sunday = monday + dt.timedelta(days=6)
+    return monday.isoformat(), sunday.isoformat()
+
+
+def build_statement_csv(
+    students: list,
+    orders: list,
+    payments: list,
+    start_date: str,
+    end_date: str,
+    payment_type: Optional[str] = None,
+) -> str:
+    students_filtered = [s for s in students if payment_type is None or s["paymentType"] == payment_type]
+
+    family_groups: dict[str, list] = {}
+    for s in students_filtered:
+        key = student_family_key(s["id"], s.get("familyId"))
+        family_groups.setdefault(key, []).append(s)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "scope",
+            "family_key",
+            "family_id",
+            "student_id",
+            "student_name",
+            "grade",
+            "payment_type",
+            "period_start",
+            "period_end",
+            "consumed_period",
+            "paid_period",
+            "balance_total",
+        ]
+    )
+
+    for family_key in sorted(family_groups.keys()):
+        members = family_groups[family_key]
+        member_ids = {m["id"] for m in members}
+        family_id = members[0].get("familyId") or ""
+
+        period_orders = [
+            o
+            for o in orders
+            if o["studentId"] in member_ids and start_date <= o["date"] <= end_date
+        ]
+        consumed_period = round(sum(o["total"] for o in period_orders), 2)
+
+        period_payments = [
+            p for p in payments if p["familyKey"] == family_key and start_date <= p["date"] <= end_date
+        ]
+        paid_period = round(sum(p["amount"] for p in period_payments), 2)
+
+        initial_sum = round(sum(float(m.get("initialBalance", 0) or 0) for m in members), 2)
+        payments_sum = round(sum(p["amount"] for p in payments if p["familyKey"] == family_key), 2)
+        all_orders_sum = round(sum(o["total"] for o in orders if o["studentId"] in member_ids), 2)
+        balance_total = round(initial_sum + payments_sum - all_orders_sum, 2)
+
+        writer.writerow(
+            [
+                "family",
+                family_key,
+                family_id,
+                "",
+                "",
+                "",
+                payment_type or "",
+                start_date,
+                end_date,
+                f"{consumed_period:.2f}",
+                f"{paid_period:.2f}",
+                f"{balance_total:.2f}",
+            ]
+        )
+
+        for m in sorted(members, key=lambda x: x["name"]):
+            student_consumed = round(
+                sum(
+                    o["total"]
+                    for o in orders
+                    if o["studentId"] == m["id"] and start_date <= o["date"] <= end_date
+                ),
+                2,
+            )
+            is_individual_account = family_key.startswith("ind-")
+            writer.writerow(
+                [
+                    "student",
+                    family_key,
+                    m.get("familyId") or "",
+                    m["id"],
+                    m["name"],
+                    m["grade"],
+                    m["paymentType"],
+                    start_date,
+                    end_date,
+                    f"{student_consumed:.2f}",
+                    f"{paid_period:.2f}" if is_individual_account else "",
+                    f"{balance_total:.2f}" if is_individual_account else "",
+                ]
+            )
+
+    return output.getvalue()
+
+
 class CafeteriaHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT_DIR), **kwargs)
@@ -352,6 +464,16 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
         content = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+    def send_csv(self, status_code: int, filename: str, csv_text: str) -> None:
+        # utf-8-sig helps Excel detect UTF-8 on mobile/desktop.
+        content = csv_text.encode("utf-8-sig")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)
@@ -411,6 +533,16 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 }
             self.send_json(200, data)
             return
+
+        if parsed.path == "/api/export.csv":
+            try:
+                return self.handle_export_csv(parsed)
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            except Exception:
+                self.send_json(500, {"error": "Error interno del servidor."})
+                return
 
         return super().do_GET()
 
@@ -493,6 +625,46 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
             self.send_json(400, {"error": str(exc)})
         except Exception:
             self.send_json(500, {"error": "Error interno del servidor."})
+
+    def handle_export_csv(self, parsed_url) -> None:
+        query = parse_qs(parsed_url.query or "")
+        start_raw = query.get("start", [None])[0]
+        end_raw = query.get("end", [None])[0]
+        payment_type_raw = query.get("paymentType", [None])[0]
+
+        if start_raw:
+            start_date = validate_iso_date(str(start_raw), "Fecha inicio")
+        else:
+            start_date = local_date()
+        if end_raw:
+            end_date = validate_iso_date(str(end_raw), "Fecha fin")
+        else:
+            end_date = start_date
+        if start_date > end_date:
+            raise ValueError("La fecha inicio no puede ser mayor que la fecha fin.")
+
+        payment_type = None
+        if payment_type_raw is not None and str(payment_type_raw).strip():
+            payment_type = str(payment_type_raw).strip()
+            if payment_type not in {"transfer", "cole"}:
+                raise ValueError("paymentType inválido. Usa transfer o cole.")
+
+        with db_connection() as conn:
+            students = fetch_students(conn)
+            orders = fetch_orders(conn)
+            payments = fetch_payments(conn)
+
+        csv_text = build_statement_csv(
+            students=students,
+            orders=orders,
+            payments=payments,
+            start_date=start_date,
+            end_date=end_date,
+            payment_type=payment_type,
+        )
+        suffix = payment_type or "all"
+        filename = f"estado_cuenta_{start_date}_{end_date}_{suffix}.csv"
+        self.send_csv(200, filename, csv_text)
 
     def handle_create_order(self):
         payload = self.read_json_body()

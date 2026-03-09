@@ -9,6 +9,9 @@ Se mantuvo el diseño del frontend prototipo y se agregó persistencia real con 
 - Activa integridad de datos (`foreign_keys`, `CHECK` constraints).
 - Usa `WAL` y `synchronous=FULL` para robustez.
 - Hace backup automático por hora en `backups/` (retiene 168 archivos).
+- Permite editar/eliminar alumnos, pedidos y pagos.
+- Incluye buscador de alumnos (alta y selección de alumno).
+- Incluye buscador rápido en Estado de Cuenta y export CSV del periodo.
 
 ## Producción real (Internet público)
 
@@ -40,7 +43,50 @@ Notas:
 Prueba automatizada ejecutada (`RESULT: PASS`) con:
 
 - Flujo vertical completo: alta alumno -> pedido -> pago -> eliminar pedido.
+- Editar pago + eliminar pago.
 - Simulación de semana (300 operaciones).
 - Simulación de mes (1200 operaciones).
 - Concurrencia de 2 usuarios.
 - Backup manual y restore drill desde backup.
+
+## Export CSV
+
+Endpoint:
+
+```bash
+GET /api/export.csv?start=YYYY-MM-DD&end=YYYY-MM-DD&paymentType=transfer|cole
+```
+
+Notas:
+
+- `start` y `end` son obligatorias en uso normal desde UI (la UI ya las manda).
+- `paymentType` es opcional (`transfer` o `cole`).
+- Devuelve CSV descargable (UTF-8 con BOM para Excel).
+
+## Operación (Fase 7)
+
+Checklist mínima semanal:
+
+1. Verificar salud:
+
+   ```bash
+   curl -s -u "$BASIC_AUTH_USER:$BASIC_AUTH_PASS" https://TU-DOMINIO/api/health
+   ```
+
+2. Smoke test en vivo (1 comando):
+
+   ```bash
+   python3 tests/ops_smoke.py --base-url https://TU-DOMINIO --user "$BASIC_AUTH_USER" --password "$BASIC_AUTH_PASS"
+   ```
+
+3. Backup manual (desde shell del servidor/Railway):
+
+   ```bash
+   python3 server.py --backup-now --db-path /data/cafeteria.db --backup-dir /data/backups
+   ```
+
+4. Drill de restore (local):
+
+   ```bash
+   python3 tests/robustness_simulation.py --port 8095
+   ```

@@ -208,6 +208,23 @@ const api = {
     body: JSON.stringify(payload),
   }),
   deletePayment: (paymentId) => apiRequest(`/api/payments/${paymentId}`, { method: 'DELETE' }),
+  exportStatementCsv: async ({ start, end, paymentType }) => {
+    const params = new URLSearchParams();
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    if (paymentType) params.set('paymentType', paymentType);
+    const url = `/api/export.csv?${params.toString()}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      let msg = `Error ${res.status}`;
+      try {
+        const err = await res.json();
+        if (err?.error) msg = err.error;
+      } catch {}
+      throw new Error(msg);
+    }
+    return await res.blob();
+  },
   createStudent: (student) => apiRequest('/api/students', {
     method: 'POST',
     body: JSON.stringify(student),
@@ -953,13 +970,14 @@ function PaymentForm({ familyKey, initialPayment = null, onSubmit, onCancel }) {
 // ESTADO DE CUENTA VIEW
 // ═══════════════════════════════════════════════════════════════════════════
 
-function StatementView({ orders, students, payments, setPayments }) {
+function StatementView({ orders, setOrders, students, payments, setPayments, onEditOrder }) {
   const [filterType, setFilterType] = useState('transfer');
   const [periodMode, setPeriodMode] = useState('weekly'); // weekly | monthly | custom
   const [weekOffset, setWeekOffset] = useState(0);
   const [monthOffset, setMonthOffset] = useState(0);
   const [customStart, setCustomStart] = useState(getToday());
   const [customEnd, setCustomEnd] = useState(getToday());
+  const [accountSearch, setAccountSearch] = useState('');
   const [expanded, setExpanded] = useState({});
   const [selectedForShare, setSelectedForShare] = useState({});
   const [viewMode, setViewMode] = useState('complete'); // complete | compact
@@ -1033,6 +1051,20 @@ function StatementView({ orders, students, payments, setPayments }) {
     const members = familyGroups[fk];
     return sum + periodOrders.filter(o => members.some(m => m.id === o.studentId)).reduce((s, o) => s + o.total, 0);
   }, 0);
+  const visibleFamilyKeys = useMemo(() => {
+    const q = accountSearch.trim().toLowerCase();
+    if (!q) return activeFamilyKeys;
+    return activeFamilyKeys.filter(fk => {
+      const members = familyGroups[fk] || [];
+      const byFamily = fk.toLowerCase().includes(q) || members.some(m => (m.familyId || '').toLowerCase().includes(q));
+      const byStudent = members.some(m => m.name.toLowerCase().includes(q) || m.grade.toLowerCase().includes(q));
+      return byFamily || byStudent;
+    });
+  }, [activeFamilyKeys, familyGroups, accountSearch]);
+  const visiblePeriodTotal = visibleFamilyKeys.reduce((sum, fk) => {
+    const members = familyGroups[fk];
+    return sum + periodOrders.filter(o => members.some(m => m.id === o.studentId)).reduce((s, o) => s + o.total, 0);
+  }, 0);
 
   // WhatsApp sharing
   const anySelected = Object.values(selectedForShare).some(v => v);
@@ -1085,6 +1117,40 @@ function StatementView({ orders, students, payments, setPayments }) {
       setTimeout(() => setToast(null), 3000);
     } catch (err) {
       alert(`No se pudo eliminar el pago: ${err.message}`);
+    }
+  };
+
+  const handleDeleteOrder = async (orderId) => {
+    if (!confirm('¿Eliminar este pedido?')) return;
+    try {
+      await api.deleteOrder(orderId);
+      setOrders(prev => prev.filter(o => o.id !== orderId));
+      setToast('Pedido eliminado');
+      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      alert(`No se pudo eliminar el pedido: ${err.message}`);
+    }
+  };
+
+  const handleExportCsv = async () => {
+    try {
+      const blob = await api.exportStatementCsv({
+        start: period.start,
+        end: period.end,
+        paymentType: filterType,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `estado_cuenta_${period.start}_${period.end}_${filterType}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setToast('CSV descargado');
+      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      alert(`No se pudo exportar CSV: ${err.message}`);
     }
   };
 
@@ -1147,6 +1213,25 @@ function StatementView({ orders, students, payments, setPayments }) {
             </div>
           </div>
         )}
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input
+            type="text"
+            value={accountSearch}
+            onChange={e => setAccountSearch(e.target.value)}
+            placeholder="🔍 Buscar cuenta o alumno"
+            style={{
+              flex: '1 1 220px', padding: '8px 12px', border: '2px solid var(--border)', borderRadius: 8,
+              fontSize: 13, outline: 'none', background: 'var(--card)',
+            }}
+            onFocus={e => e.target.style.borderColor = 'var(--primary)'}
+            onBlur={e => e.target.style.borderColor = 'var(--border)'}
+          />
+          <button onClick={handleExportCsv} style={{
+            padding: '8px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
+            background: 'var(--primary)', color: '#fff', fontWeight: 700, fontSize: 12,
+          }}>⬇ CSV</button>
+        </div>
       </div>
 
       {/* Totals bar */}
@@ -1154,8 +1239,13 @@ function StatementView({ orders, students, payments, setPayments }) {
         background: 'var(--accent-light)', borderRadius: 12, padding: '14px 20px', marginBottom: 14,
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
-        <span style={{ fontWeight: 700, fontSize: 14 }}>Consumo del periodo ({filterType === 'transfer' ? 'Transfer' : 'Cole'})</span>
-        <span style={{ fontFamily: "'Fredoka One', cursive", fontSize: 22, color: 'var(--primary)' }}>{fmt(periodTotal)}</span>
+        <span style={{ fontWeight: 700, fontSize: 14 }}>
+          Consumo del periodo ({filterType === 'transfer' ? 'Transfer' : 'Cole'})
+          {accountSearch.trim() && ` · filtro activo`}
+        </span>
+        <span style={{ fontFamily: "'Fredoka One', cursive", fontSize: 22, color: 'var(--primary)' }}>
+          {fmt(accountSearch.trim() ? visiblePeriodTotal : periodTotal)}
+        </span>
       </div>
 
       {/* WhatsApp bar */}
@@ -1181,13 +1271,15 @@ function StatementView({ orders, students, payments, setPayments }) {
       )}
 
       {/* Content */}
-      {activeFamilyKeys.length === 0 ? (
+      {visibleFamilyKeys.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-light)' }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>📭</div>
-          <p style={{ fontWeight: 600 }}>Sin actividad en este periodo</p>
+          <p style={{ fontWeight: 600 }}>
+            {accountSearch.trim() ? 'Sin resultados para esta búsqueda' : 'Sin actividad en este periodo'}
+          </p>
         </div>
       ) : (
-        activeFamilyKeys.map(fk => {
+        visibleFamilyKeys.map(fk => {
           const members = familyGroups[fk];
           const isFamily = members.length > 1 || (members[0]?.familyId != null);
           const balance = computeBalance(fk, students, orders, payments);
@@ -1377,6 +1469,20 @@ function StatementView({ orders, students, payments, setPayments }) {
                                 </div>
                                 {dayOrders.map(o => (
                                   <div key={o.id} style={{ background: 'var(--bg)', borderRadius: 8, padding: '8px 10px', marginBottom: 4, fontSize: 13 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                                      <span style={{ fontSize: 11, color: 'var(--text-light)', fontWeight: 700 }}>🕐 {o.time}</span>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <span style={{ fontWeight: 800, color: 'var(--primary)', fontSize: 12 }}>{fmt(o.total)}</span>
+                                        <button onClick={() => onEditOrder && onEditOrder(o)} style={{
+                                          background: 'none', border: 'none', cursor: 'pointer', fontSize: 14,
+                                          color: 'var(--primary)', padding: 0,
+                                        }} title="Editar pedido">✏️</button>
+                                        <button onClick={() => handleDeleteOrder(o.id)} style={{
+                                          background: 'none', border: 'none', cursor: 'pointer', fontSize: 14,
+                                          color: 'var(--danger)', padding: 0,
+                                        }} title="Eliminar pedido">🗑️</button>
+                                      </div>
+                                    </div>
                                     {o.items.map((item, idx) => {
                                       const p = PRODUCT_MAP[item.productId];
                                       return (
@@ -1748,7 +1854,16 @@ function App() {
           />
         )}
         {view === 'today' && <TodayView orders={orders} setOrders={setOrders} students={students} onEditOrder={startOrderEdit} />}
-        {view === 'statement' && <StatementView orders={orders} students={students} payments={payments} setPayments={setPayments} />}
+        {view === 'statement' && (
+          <StatementView
+            orders={orders}
+            setOrders={setOrders}
+            students={students}
+            payments={payments}
+            setPayments={setPayments}
+            onEditOrder={startOrderEdit}
+          />
+        )}
       </main>
     </div>
   );
