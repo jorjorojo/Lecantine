@@ -467,7 +467,18 @@ function Header({ view, setView, orderCount }) {
 
 // ─── Student Picker ───
 function StudentPicker({ selected, onSelect, students, allStudents, orders, payments, filterType, onFilterChange }) {
-  const filtered = students.filter(s => s.paymentType === filterType);
+  const [search, setSearch] = useState('');
+  const filtered = useMemo(() => {
+    const base = students.filter(s => s.paymentType === filterType);
+    const q = search.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter(s =>
+      s.name.toLowerCase().includes(q) ||
+      s.grade.toLowerCase().includes(q) ||
+      String(s.id).includes(q) ||
+      (s.familyId || '').toLowerCase().includes(q)
+    );
+  }, [students, filterType, search]);
 
   return (
     <div className="fade-in">
@@ -475,6 +486,19 @@ function StudentPicker({ selected, onSelect, students, allStudents, orders, paym
         <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-light)' }}>Selecciona alumno</h2>
         <TypeToggle value={filterType} onChange={onFilterChange} />
       </div>
+      <input
+        type="text"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        placeholder="🔍 Buscar alumno (nombre, grado, familia)"
+        style={{
+          width: '100%', padding: '12px 16px', border: '2px solid var(--border)',
+          borderRadius: 12, fontSize: 14, outline: 'none', background: 'var(--card)', transition: 'border-color 0.2s',
+          marginBottom: 10,
+        }}
+        onFocus={e => e.target.style.borderColor = 'var(--primary)'}
+        onBlur={e => e.target.style.borderColor = 'var(--border)'}
+      />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10 }}>
         {filtered.map(s => {
           const balance = computeBalance(getFamilyKey(s), allStudents, orders, payments);
@@ -503,7 +527,7 @@ function StudentPicker({ selected, onSelect, students, allStudents, orders, paym
         })}
         {filtered.length === 0 && (
           <p style={{ gridColumn: '1 / -1', textAlign: 'center', color: 'var(--text-light)', padding: 40 }}>
-            No hay alumnos en esta categoría
+            No hay alumnos para esta búsqueda
           </p>
         )}
       </div>
@@ -1302,10 +1326,21 @@ function RegisterView({ students, setStudents }) {
   const [familyId, setFamilyId] = useState('');
   const [emoji, setEmoji] = useState('👦');
   const [initialBalance, setInitialBalance] = useState('');
+  const [studentSearch, setStudentSearch] = useState('');
   const [editingStudentId, setEditingStudentId] = useState(null);
   const [toast, setToast] = useState(null);
 
   const existingFamilies = [...new Set(students.filter(s => s.familyId).map(s => s.familyId))];
+  const visibleStudents = useMemo(() => {
+    const q = studentSearch.trim().toLowerCase();
+    if (!q) return students;
+    return students.filter(s =>
+      s.name.toLowerCase().includes(q) ||
+      s.grade.toLowerCase().includes(q) ||
+      String(s.id).includes(q) ||
+      (s.familyId || '').toLowerCase().includes(q)
+    );
+  }, [students, studentSearch]);
   const clearForm = () => {
     setName('');
     setGrade('');
@@ -1466,8 +1501,21 @@ function RegisterView({ students, setStudents }) {
       <h3 style={{ fontSize: 15, fontWeight: 800, marginTop: 28, marginBottom: 12 }}>
         Alumnos registrados ({students.length})
       </h3>
+      <input
+        type="text"
+        value={studentSearch}
+        onChange={e => setStudentSearch(e.target.value)}
+        placeholder="🔍 Buscar alumno (nombre, grado, familia)"
+        style={{
+          width: '100%', maxWidth: 480, padding: '12px 16px', border: '2px solid var(--border)',
+          borderRadius: 12, fontSize: 14, outline: 'none', background: 'var(--card)', transition: 'border-color 0.2s',
+          marginBottom: 10,
+        }}
+        onFocus={e => e.target.style.borderColor = 'var(--primary)'}
+        onBlur={e => e.target.style.borderColor = 'var(--border)'}
+      />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
-        {students.map(s => (
+        {visibleStudents.map(s => (
           <div key={s.id} style={{
             background: 'var(--card)', borderRadius: 10, padding: '10px 12px',
             border: editingStudentId === s.id ? '2px solid var(--primary)' : '1px solid var(--border)',
@@ -1491,6 +1539,11 @@ function RegisterView({ students, setStudents }) {
             </div>
           </div>
         ))}
+        {visibleStudents.length === 0 && (
+          <p style={{ gridColumn: '1 / -1', textAlign: 'center', color: 'var(--text-light)', padding: 30 }}>
+            No hay alumnos para esta búsqueda
+          </p>
+        )}
       </div>
     </div>
   );
