@@ -47,7 +47,7 @@
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel" data-presets="env,react">
+<script type="text/babel">
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -180,8 +180,8 @@ const apiRequest = async (path, options = {}) => {
     let msg = `Error ${res.status}`;
     try {
       const err = await res.json();
-      if (err && err.error) msg = err.error;
-    } catch (e) {}
+      if (err?.error) msg = err.error;
+    } catch {}
     throw new Error(msg);
   }
   if (res.status === 204) return null;
@@ -257,9 +257,9 @@ const buildWhatsAppComplete = (studentsToShare, allStudents, orders, payments, p
 
   familyKeys.forEach(fk => {
     const members = studentsToShare.filter(s => getFamilyKey(s) === fk);
-    const isFamily = members.length > 1 || (members[0] && members[0].familyId);
+    const isFamily = members.length > 1 || members[0]?.familyId;
 
-    if (isFamily && members[0] && members[0].familyId) {
+    if (isFamily && members[0]?.familyId) {
       msg += `👨‍👩‍👧‍👦 *Familia ${members[0].familyId}*\n`;
     }
 
@@ -277,7 +277,7 @@ const buildWhatsAppComplete = (studentsToShare, allStudents, orders, payments, p
         byDate[date].forEach(o => {
           o.items.forEach(item => {
             const p = PRODUCT_MAP[item.productId];
-            msg += `    • ${(p && p.name) || 'Producto'} x${item.qty} = ${fmt(item.unitPrice * item.qty)}\n`;
+            msg += `    • ${p?.name} x${item.qty} = ${fmt(item.unitPrice * item.qty)}\n`;
           });
         });
       });
@@ -307,7 +307,7 @@ const buildWhatsAppCompact = (studentsToShare, allStudents, orders, payments, pe
 
   familyKeys.forEach(fk => {
     const members = studentsToShare.filter(s => getFamilyKey(s) === fk);
-    if (members.length > 1 || (members[0] && members[0].familyId)) {
+    if (members.length > 1 || members[0]?.familyId) {
       msg += `👨‍👩‍👧‍👦 *Familia ${members[0].familyId || ''}*\n`;
     }
 
@@ -608,7 +608,7 @@ function CartSummary({ cart, studentId, students, onConfirm, onClear }) {
       <div style={{ maxWidth: 960, margin: '0 auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <div>
-            <span style={{ fontWeight: 700, fontSize: 14 }}>{student && student.emoji} {student && student.name}</span>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>{student?.emoji} {student?.name}</span>
             <span style={{ color: 'var(--text-light)', fontSize: 13, marginLeft: 8 }}>{cartItemCount(cart)} artículos</span>
           </div>
           <div style={{ fontFamily: "'Fredoka One', cursive", fontSize: 22, color: 'var(--secondary)' }}>{fmt(total)}</div>
@@ -647,7 +647,7 @@ function NewOrderView({ orders, setOrders, students, payments }) {
       const newOrder = await api.createOrder(studentId, cart);
       setOrders(prev => [...prev, newOrder]);
       const student = students.find(s => s.id === studentId);
-      setToast(`Pedido de ${(student && student.name) || 'Alumno'} registrado (${fmt(newOrder.total)})`);
+      setToast(`Pedido de ${student?.name || 'Alumno'} registrado (${fmt(newOrder.total)})`);
       setCart([]);
       setTimeout(() => setToast(null), 3000);
     } catch (err) {
@@ -717,10 +717,10 @@ function TodayView({ orders, setOrders, students }) {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 22 }}>{s && s.emoji}</span>
+                  <span style={{ fontSize: 22 }}>{s?.emoji}</span>
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 15 }}>{s && s.name}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-light)' }}>{s && s.grade}</div>
+                    <div style={{ fontWeight: 700, fontSize: 15 }}>{s?.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-light)' }}>{s?.grade}</div>
                   </div>
                 </div>
                 <div style={{ fontWeight: 800, color: 'var(--secondary)', fontSize: 16 }}>{fmt(studentTotal)}</div>
@@ -742,7 +742,7 @@ function TodayView({ orders, setOrders, students }) {
                       const p = PRODUCT_MAP[item.productId];
                       return (
                         <span key={idx} style={{ marginRight: 8 }}>
-                          {(p && p.name) || 'Producto'} x{item.qty}
+                          {p?.name} x{item.qty}
                           <span style={{ color: 'var(--text-light)' }}> ({fmt(item.unitPrice * item.qty)})</span>
                           {idx < o.items.length - 1 && ' · '}
                         </span>
@@ -1027,7 +1027,7 @@ function StatementView({ orders, students, payments, setPayments }) {
       ) : (
         activeFamilyKeys.map(fk => {
           const members = familyGroups[fk];
-          const isFamily = members.length > 1 || (members[0] && members[0].familyId != null);
+          const isFamily = members.length > 1 || (members[0]?.familyId != null);
           const balance = computeBalance(fk, students, orders, payments);
           const fkOrders = periodOrders.filter(o => members.some(m => m.id === o.studentId));
           const fkConsumed = fkOrders.reduce((s, o) => s + o.total, 0);
@@ -1175,7 +1175,7 @@ function StatementView({ orders, students, payments, setPayments }) {
                                       const p = PRODUCT_MAP[item.productId];
                                       return (
                                         <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
-                                          <span>{(p && p.name) || 'Producto'} <span style={{ color: 'var(--text-light)' }}>x{item.qty}</span></span>
+                                          <span>{p?.name} <span style={{ color: 'var(--text-light)' }}>x{item.qty}</span></span>
                                           <span style={{ fontWeight: 600 }}>{fmt(item.unitPrice * item.qty)}</span>
                                         </div>
                                       );
