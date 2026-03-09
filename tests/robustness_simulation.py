@@ -90,6 +90,7 @@ def validate_state(state: dict):
 
 
 def run_vertical_flow(base_url: str):
+    health = request_json(base_url, "GET", "/api/health")
     state = request_json(base_url, "GET", "/api/state")
     initial_students = len(state["students"])
 
@@ -118,6 +119,7 @@ def run_vertical_flow(base_url: str):
         },
     )
     assert new_order["id"] > 0, "No se creó pedido"
+    assert new_order["date"] == health["date"], "El pedido no cae en la fecha operativa actual (timezone mismatch)"
 
     payment = request_json(
         base_url,
