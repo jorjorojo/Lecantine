@@ -1,0 +1,1433 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cafetería Escolar - Control de Pedidos</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Fredoka+One&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #FFF8F0;
+    --card: #FFFFFF;
+    --primary: #E8663C;
+    --primary-light: #FDEEE8;
+    --secondary: #2D6A4F;
+    --secondary-light: #E8F5EE;
+    --accent: #F4A623;
+    --accent-light: #FFF3DC;
+    --text: #2C1810;
+    --text-light: #8B7355;
+    --border: #E8DDD0;
+    --danger: #DC3545;
+    --danger-light: #FDE8EA;
+    --shadow: 0 2px 12px rgba(44,24,16,0.08);
+    --shadow-lg: 0 8px 32px rgba(44,24,16,0.12);
+  }
+  body {
+    font-family: 'Nunito', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  input, select, button { font-family: inherit; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in { animation: fadeIn 0.3s ease-out; }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+  .slide-up { animation: slideUp 0.4s ease-out; }
+  @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.15); } 100% { transform: scale(1); } }
+  .pop { animation: pop 0.25s ease; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DATA LAYER
+// ═══════════════════════════════════════════════════════════════════════════
+
+const CATEGORIES = [
+  { id: "comida", name: "Comida", icon: "🍲" },
+  { id: "dulces", name: "Dulces y Botanas", icon: "🍬" },
+  { id: "bebidas", name: "Bebidas", icon: "🥤" },
+];
+
+const PRODUCTS = [
+  { id: 1, name: "Torta de arrachera", price: 60, cat: "comida" },
+  { id: 2, name: "Torta de jamón", price: 60, cat: "comida" },
+  { id: 3, name: "Torta de pechuga de pavo", price: 60, cat: "comida" },
+  { id: 4, name: "Torta de huevo", price: 60, cat: "comida" },
+  { id: 5, name: "Torta de pollo deshebrado", price: 60, cat: "comida" },
+  { id: 6, name: "Torta de pollo (con mayonesa)", price: 55, cat: "comida" },
+  { id: 7, name: "Gringa de arrachera", price: 50, cat: "comida" },
+  { id: 8, name: "Sincronizada de jamón / pechuga de pavo", price: 45, cat: "comida" },
+  { id: 9, name: "Sándwich de pollo deshebrado", price: 45, cat: "comida" },
+  { id: 10, name: "Tostada de pollo", price: 50, cat: "comida" },
+  { id: 11, name: "Tacos dorados de pollo (3 tacos)", price: 45, cat: "comida" },
+  { id: 12, name: "Taco dorado de pollo (unitario)", price: 18, cat: "comida" },
+  { id: 13, name: "Chilaquiles con pollo", price: 55, cat: "comida" },
+  { id: 14, name: "Chilaquiles sencillos (sin pollo)", price: 45, cat: "comida" },
+  { id: 15, name: "Spaghetti a la boloñesa", price: 55, cat: "comida" },
+  { id: 16, name: "Pan pita con carne", price: 70, cat: "comida" },
+  { id: 17, name: "Pan pita con pollo", price: 70, cat: "comida" },
+  { id: 18, name: "Bolipizza", price: 50, cat: "comida" },
+  { id: 19, name: "Vaso de verduras (pepino, zanahoria, jícama)", price: 18, cat: "dulces" },
+  { id: 20, name: "Bolsa de palomitas", price: 15, cat: "dulces" },
+  { id: 21, name: "Bolsa de cacahuate natural", price: 15, cat: "dulces" },
+  { id: 22, name: "Bolsa de cacahuate en cáscara", price: 8, cat: "dulces" },
+  { id: 23, name: "Panqué de cocoa", price: 20, cat: "dulces" },
+  { id: 24, name: "Cupcake de vainilla", price: 20, cat: "dulces" },
+  { id: 25, name: "Cupcake de frutos rojos", price: 20, cat: "dulces" },
+  { id: 26, name: "Barrita de amaranto", price: 15, cat: "dulces" },
+  { id: 27, name: "Palanqueta", price: 12, cat: "dulces" },
+  { id: 28, name: "Habas enchiladas", price: 15, cat: "dulces" },
+  { id: 29, name: "Garbanzos enchilados", price: 15, cat: "dulces" },
+  { id: 30, name: "Maicitos enchilados", price: 15, cat: "dulces" },
+  { id: 31, name: "Barra de granola", price: 20, cat: "dulces" },
+  { id: 32, name: "Leche Santa Clara fresa", price: 20, cat: "bebidas" },
+  { id: 33, name: "Leche Santa Clara chocolate", price: 20, cat: "bebidas" },
+  { id: 34, name: "Congelada / boli de jugo natural", price: 20, cat: "bebidas" },
+  { id: 35, name: "Jugo natural tetra pack", price: 18, cat: "bebidas" },
+  { id: 36, name: "Botella de agua natural (½ litro)", price: 10, cat: "bebidas" },
+  { id: 37, name: "Botella de agua natural (1 litro)", price: 18, cat: "bebidas" },
+  { id: 38, name: "Botella de agua de sabor (½ litro)", price: 16, cat: "bebidas" },
+  { id: 39, name: "Botella de agua de sabor (1 litro)", price: 24, cat: "bebidas" },
+];
+
+const PRODUCT_MAP = {};
+PRODUCTS.forEach(p => PRODUCT_MAP[p.id] = p);
+
+// Students: initialBalance = positive means they paid ahead, negative means they owe
+const DEFAULT_STUDENTS = [
+  { id: 1, name: "Sofía García", grade: "3°A", emoji: "👧", paymentType: "transfer", familyId: "FAM-001", initialBalance: 200 },
+  { id: 2, name: "Mateo García", grade: "5°B", emoji: "👦", paymentType: "transfer", familyId: "FAM-001", initialBalance: 0 },
+  { id: 3, name: "Valentina Hernández", grade: "4°A", emoji: "👧", paymentType: "cole", familyId: null, initialBalance: -120 },
+  { id: 4, name: "Santiago Martínez", grade: "4°A", emoji: "👦", paymentType: "transfer", familyId: "FAM-002", initialBalance: 0 },
+  { id: 5, name: "Regina Martínez", grade: "6°A", emoji: "👧", paymentType: "transfer", familyId: "FAM-002", initialBalance: -55 },
+  { id: 6, name: "Emiliano Torres", grade: "5°A", emoji: "👦", paymentType: "cole", familyId: null, initialBalance: 300 },
+  { id: 7, name: "Camila Flores", grade: "5°A", emoji: "👧", paymentType: "transfer", familyId: null, initialBalance: -230 },
+  { id: 8, name: "Leonardo Ramírez", grade: "5°B", emoji: "👦", paymentType: "cole", familyId: "FAM-003", initialBalance: 0 },
+  { id: 9, name: "Isabella Ramírez", grade: "3°A", emoji: "👧", paymentType: "cole", familyId: "FAM-003", initialBalance: -45 },
+  { id: 10, name: "Diego Morales", grade: "6°B", emoji: "👦", paymentType: "transfer", familyId: null, initialBalance: 500 },
+];
+
+// Payment: { id, familyKey, amount, date, method: 'transfer'|'efectivo', note }
+// familyKey = familyId if family, or "ind-{studentId}" if individual
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LOGIC LAYER
+// ═══════════════════════════════════════════════════════════════════════════
+
+const fmt = (n) => `$${Math.abs(n).toFixed(2)}`;
+const fmtSigned = (n) => n >= 0 ? `+$${n.toFixed(2)}` : `-$${Math.abs(n).toFixed(2)}`;
+
+const toLocalDateStr = (dateObj) => {
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const d = String(dateObj.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const getToday = () => toLocalDateStr(new Date());
+
+const DAY_NAMES = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+const MONTH_NAMES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+const MONTH_NAMES_FULL = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+const formatDate = (dateStr) => {
+  const d = new Date(dateStr + 'T12:00:00');
+  return `${DAY_NAMES[d.getDay()]} ${d.getDate()} ${MONTH_NAMES[d.getMonth()]}`;
+};
+
+const formatDateShort = (dateStr) => {
+  const d = new Date(dateStr + 'T12:00:00');
+  return `${DAY_NAMES[d.getDay()].substring(0,3)} ${d.getDate()} ${MONTH_NAMES[d.getMonth()]}`;
+};
+
+const getWeekRange = (date) => {
+  const d = new Date(date + 'T12:00:00');
+  const day = d.getDay();
+  const diffToMon = day === 0 ? -6 : 1 - day;
+  const mon = new Date(d);
+  mon.setDate(d.getDate() + diffToMon);
+  const fri = new Date(mon);
+  fri.setDate(mon.getDate() + 4);
+  return { start: toLocalDateStr(mon), end: toLocalDateStr(fri) };
+};
+
+const getMonthRange = (year, month) => {
+  const start = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const end = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  return { start, end };
+};
+
+// ─── API ───
+const apiRequest = async (path, options = {}) => {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options,
+  });
+  if (!res.ok) {
+    let msg = `Error ${res.status}`;
+    try {
+      const err = await res.json();
+      if (err?.error) msg = err.error;
+    } catch {}
+    throw new Error(msg);
+  }
+  if (res.status === 204) return null;
+  return await res.json();
+};
+
+const api = {
+  getState: () => apiRequest('/api/state'),
+  createOrder: (studentId, cart) => apiRequest('/api/orders', {
+    method: 'POST',
+    body: JSON.stringify({ studentId, cart }),
+  }),
+  deleteOrder: (orderId) => apiRequest(`/api/orders/${orderId}`, { method: 'DELETE' }),
+  createPayment: (payment) => apiRequest('/api/payments', {
+    method: 'POST',
+    body: JSON.stringify(payment),
+  }),
+  createStudent: (student) => apiRequest('/api/students', {
+    method: 'POST',
+    body: JSON.stringify(student),
+  }),
+};
+
+// ─── Cart Logic ───
+const cartAdd = (cart, productId) => {
+  const existing = cart.find(i => i.productId === productId);
+  if (existing) return cart.map(i => i.productId === productId ? { ...i, qty: i.qty + 1 } : i);
+  return [...cart, { productId, qty: 1 }];
+};
+const cartRemove = (cart, productId) => {
+  const existing = cart.find(i => i.productId === productId);
+  if (!existing) return cart;
+  if (existing.qty <= 1) return cart.filter(i => i.productId !== productId);
+  return cart.map(i => i.productId === productId ? { ...i, qty: i.qty - 1 } : i);
+};
+const cartGetQty = (cart, productId) => (cart.find(i => i.productId === productId) || { qty: 0 }).qty;
+const cartTotal = (cart) => cart.reduce((s, i) => s + PRODUCT_MAP[i.productId].price * i.qty, 0);
+const cartItemCount = (cart) => cart.reduce((s, i) => s + i.qty, 0);
+
+// ─── Student Logic ───
+const getFamilyKey = (student) => student.familyId || `ind-${student.id}`;
+
+// ─── Balance Logic ───
+// Balance = initialBalance(all family members) + payments - orders consumed
+const computeBalance = (familyKey, students, orders, payments) => {
+  const members = students.filter(s => getFamilyKey(s) === familyKey);
+  const initialSum = members.reduce((s, m) => s + (m.initialBalance || 0), 0);
+  const paymentsSum = payments
+    .filter(p => p.familyKey === familyKey)
+    .reduce((s, p) => s + p.amount, 0);
+  const ordersSum = orders
+    .filter(o => members.some(m => m.id === o.studentId))
+    .reduce((s, o) => s + o.total, 0);
+  return initialSum + paymentsSum - ordersSum;
+};
+
+const computeStudentOrders = (studentId, orders, start, end) =>
+  orders.filter(o => o.studentId === studentId && o.date >= start && o.date <= end);
+
+const computePeriodOrders = (familyKey, students, orders, start, end) => {
+  const members = students.filter(s => getFamilyKey(s) === familyKey);
+  return orders.filter(o => members.some(m => m.id === o.studentId) && o.date >= start && o.date <= end);
+};
+
+const computePeriodPayments = (familyKey, payments, start, end) =>
+  payments.filter(p => p.familyKey === familyKey && p.date >= start && p.date <= end);
+
+// ─── WhatsApp ───
+const buildWhatsAppComplete = (studentsToShare, allStudents, orders, payments, period) => {
+  let msg = `🏫 *Cafetería Escolar*\n📅 ${formatDate(period.start)} al ${formatDate(period.end)}\n\n`;
+
+  const familyKeys = [...new Set(studentsToShare.map(s => getFamilyKey(s)))];
+
+  familyKeys.forEach(fk => {
+    const members = studentsToShare.filter(s => getFamilyKey(s) === fk);
+    const isFamily = members.length > 1 || members[0]?.familyId;
+
+    if (isFamily && members[0]?.familyId) {
+      msg += `👨‍👩‍👧‍👦 *Familia ${members[0].familyId}*\n`;
+    }
+
+    members.forEach(s => {
+      const studentOrders = orders.filter(o => o.studentId === s.id && o.date >= period.start && o.date <= period.end);
+      if (studentOrders.length === 0) return;
+      const total = studentOrders.reduce((sum, o) => sum + o.total, 0);
+      msg += `\n👤 *${s.name}* (${s.grade})\n`;
+
+      const byDate = {};
+      studentOrders.forEach(o => { if (!byDate[o.date]) byDate[o.date] = []; byDate[o.date].push(o); });
+
+      Object.keys(byDate).sort().forEach(date => {
+        msg += `  📆 ${formatDateShort(date)}\n`;
+        byDate[date].forEach(o => {
+          o.items.forEach(item => {
+            const p = PRODUCT_MAP[item.productId];
+            msg += `    • ${p?.name} x${item.qty} = ${fmt(item.unitPrice * item.qty)}\n`;
+          });
+        });
+      });
+      msg += `  💰 *Subtotal: ${fmt(total)}*\n`;
+    });
+
+    // Family totals
+    const fkOrders = computePeriodOrders(fk, allStudents, orders, period.start, period.end);
+    const fkPayments = computePeriodPayments(fk, payments, period.start, period.end);
+    const consumed = fkOrders.reduce((s, o) => s + o.total, 0);
+    const paid = fkPayments.reduce((s, p) => s + p.amount, 0);
+    const balance = computeBalance(fk, allStudents, orders, payments);
+
+    msg += `\n  🧾 Consumo periodo: ${fmt(consumed)}`;
+    if (paid > 0) msg += `\n  ✅ Pagos periodo: ${fmt(paid)}`;
+    msg += `\n  💰 *Saldo: ${balance >= 0 ? 'A favor' : 'Debe'} ${fmt(balance)}*\n`;
+    msg += `\n───────────────\n`;
+  });
+
+  return msg;
+};
+
+const buildWhatsAppCompact = (studentsToShare, allStudents, orders, payments, period) => {
+  let msg = `🏫 *Cafetería Escolar*\n📅 ${formatDate(period.start)} al ${formatDate(period.end)}\n\n`;
+
+  const familyKeys = [...new Set(studentsToShare.map(s => getFamilyKey(s)))];
+
+  familyKeys.forEach(fk => {
+    const members = studentsToShare.filter(s => getFamilyKey(s) === fk);
+    if (members.length > 1 || members[0]?.familyId) {
+      msg += `👨‍👩‍👧‍👦 *Familia ${members[0].familyId || ''}*\n`;
+    }
+
+    members.forEach(s => {
+      const studentOrders = orders.filter(o => o.studentId === s.id && o.date >= period.start && o.date <= period.end);
+      if (studentOrders.length === 0) return;
+      msg += `👤 *${s.name}* (${s.grade})\n`;
+
+      const byDate = {};
+      studentOrders.forEach(o => {
+        if (!byDate[o.date]) byDate[o.date] = 0;
+        byDate[o.date] += o.total;
+      });
+      Object.keys(byDate).sort().forEach(date => {
+        msg += `  ${formatDateShort(date)}: ${fmt(byDate[date])}\n`;
+      });
+      const total = studentOrders.reduce((sum, o) => sum + o.total, 0);
+      msg += `  💰 *${fmt(total)}*\n\n`;
+    });
+
+    const balance = computeBalance(fk, allStudents, orders, payments);
+    msg += `Saldo: ${balance >= 0 ? '✅ A favor' : '⚠️ Debe'} *${fmt(balance)}*\n───────────────\n`;
+  });
+
+  return msg;
+};
+
+const shareWhatsApp = (message) => window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRESENTATION LAYER
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── Reusable: Toggle (2-option) ───
+function TypeToggle({ value, onChange, style }) {
+  return (
+    <div style={{
+      display: 'inline-flex', borderRadius: 10, overflow: 'hidden',
+      border: '2px solid var(--border)', background: 'var(--card)', ...style,
+    }}>
+      {['transfer', 'cole'].map(type => (
+        <button key={type} onClick={() => onChange(type)} style={{
+          padding: '6px 16px', border: 'none', cursor: 'pointer',
+          fontWeight: 700, fontSize: 13, transition: 'all 0.2s',
+          background: value === type ? 'var(--primary)' : 'transparent',
+          color: value === type ? '#fff' : 'var(--text-light)',
+        }}>
+          {type === 'transfer' ? '💳 Transfer' : '🏫 Cole'}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Reusable: Segmented Control ───
+function SegmentedControl({ options, value, onChange, style }) {
+  return (
+    <div style={{
+      display: 'inline-flex', borderRadius: 10, overflow: 'hidden',
+      border: '2px solid var(--border)', background: 'var(--card)', ...style,
+    }}>
+      {options.map(opt => (
+        <button key={opt.value} onClick={() => onChange(opt.value)} style={{
+          padding: '6px 14px', border: 'none', cursor: 'pointer',
+          fontWeight: 700, fontSize: 12, transition: 'all 0.2s', whiteSpace: 'nowrap',
+          background: value === opt.value ? 'var(--secondary)' : 'transparent',
+          color: value === opt.value ? '#fff' : 'var(--text-light)',
+        }}>
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Reusable: Balance Badge ───
+function BalanceBadge({ amount, size, style }) {
+  const isPositive = amount >= 0;
+  const sz = size || 'normal';
+  return (
+    <span style={{
+      background: isPositive ? 'var(--secondary-light)' : 'var(--danger-light)',
+      color: isPositive ? 'var(--secondary)' : 'var(--danger)',
+      borderRadius: 8, fontWeight: 800,
+      padding: sz === 'small' ? '2px 6px' : '3px 10px',
+      fontSize: sz === 'small' ? 10 : 12,
+      ...style,
+    }}>
+      {isPositive ? '✓' : '⚠'} {fmt(amount)}
+    </span>
+  );
+}
+
+// ─── Header ───
+function Header({ view, setView, orderCount }) {
+  const tabs = [
+    { id: 'register', label: 'Alta Alumno', icon: '👤' },
+    { id: 'order', label: 'Nueva Orden', icon: '🛒' },
+    { id: 'today', label: 'Hoy', icon: '📋' },
+    { id: 'statement', label: 'Estado de Cuenta', icon: '📊' },
+  ];
+  return (
+    <header style={{
+      background: 'linear-gradient(135deg, #E8663C 0%, #D4522A 100%)',
+      padding: '0', position: 'sticky', top: 0, zIndex: 50,
+      boxShadow: '0 4px 20px rgba(232,102,60,0.3)',
+    }}>
+      <div style={{ maxWidth: 960, margin: '0 auto', padding: '16px 20px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+          <span style={{ fontSize: 32 }}>🏫</span>
+          <div>
+            <h1 style={{ fontFamily: "'Fredoka One', cursive", fontSize: 22, color: '#fff', letterSpacing: 0.5 }}>
+              Cafetería Escolar
+            </h1>
+            <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: 600 }}>Control de Pedidos</p>
+          </div>
+        </div>
+        <nav style={{ display: 'flex', gap: 4, overflowX: 'auto' }}>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setView(t.id)} style={{
+              padding: '10px 14px', border: 'none', borderRadius: '10px 10px 0 0',
+              cursor: 'pointer', fontWeight: 700, fontSize: 13,
+              display: 'flex', alignItems: 'center', gap: 6,
+              transition: 'all 0.2s', whiteSpace: 'nowrap',
+              background: view === t.id ? '#FFF8F0' : 'rgba(255,255,255,0.15)',
+              color: view === t.id ? 'var(--primary)' : 'rgba(255,255,255,0.9)',
+            }}>
+              <span>{t.icon}</span> {t.label}
+              {t.id === 'order' && orderCount > 0 && (
+                <span style={{
+                  background: 'var(--accent)', color: '#fff', borderRadius: 99,
+                  fontSize: 11, fontWeight: 800, padding: '2px 7px', minWidth: 20, textAlign: 'center',
+                }}>{orderCount}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+      </div>
+    </header>
+  );
+}
+
+// ─── Student Picker ───
+function StudentPicker({ selected, onSelect, students, allStudents, orders, payments, filterType, onFilterChange }) {
+  const filtered = students.filter(s => s.paymentType === filterType);
+
+  return (
+    <div className="fade-in">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-light)' }}>Selecciona alumno</h2>
+        <TypeToggle value={filterType} onChange={onFilterChange} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10 }}>
+        {filtered.map(s => {
+          const balance = computeBalance(getFamilyKey(s), allStudents, orders, payments);
+          return (
+            <button key={s.id} onClick={() => onSelect(s.id)} style={{
+              padding: '14px 12px',
+              border: selected === s.id ? '2px solid var(--primary)' : '2px solid var(--border)',
+              borderRadius: 12, cursor: 'pointer',
+              background: selected === s.id ? 'var(--primary-light)' : 'var(--card)',
+              textAlign: 'left', transition: 'all 0.2s',
+              boxShadow: selected === s.id ? '0 2px 8px rgba(232,102,60,0.15)' : 'none',
+              position: 'relative',
+            }}>
+              <span style={{ fontSize: 24 }}>{s.emoji}</span>
+              <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{s.name}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-light)' }}>
+                {s.grade}{s.familyId && <span style={{ marginLeft: 4, opacity: 0.6 }}>👨‍👩‍👧‍👦</span>}
+              </div>
+              {balance !== 0 && (
+                <div style={{ position: 'absolute', top: 8, right: 8 }}>
+                  <BalanceBadge amount={balance} size="small" />
+                </div>
+              )}
+            </button>
+          );
+        })}
+        {filtered.length === 0 && (
+          <p style={{ gridColumn: '1 / -1', textAlign: 'center', color: 'var(--text-light)', padding: 40 }}>
+            No hay alumnos en esta categoría
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Menu (no "Todos" filter, default first category) ───
+function MenuSection({ cart, setCart }) {
+  const [search, setSearch] = useState('');
+  const [activeCat, setActiveCat] = useState(CATEGORIES[0].id);
+
+  const filtered = useMemo(() => {
+    let items = PRODUCTS;
+    if (activeCat !== 'all') items = items.filter(p => p.cat === activeCat);
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      items = items.filter(p => p.name.toLowerCase().includes(q));
+    }
+    return items;
+  }, [search, activeCat]);
+
+  const addItem = (productId) => setCart(prev => cartAdd(prev, productId));
+  const removeItem = (productId) => setCart(prev => cartRemove(prev, productId));
+
+  // When searching, show all categories
+  useEffect(() => {
+    if (search.trim()) setActiveCat('all');
+  }, [search]);
+
+  return (
+    <div className="fade-in">
+      <div style={{ position: 'sticky', top: 80, zIndex: 10, background: 'var(--bg)', paddingBottom: 12, paddingTop: 8 }}>
+        <input type="text" placeholder="🔍 Buscar producto..." value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{
+            width: '100%', padding: '12px 16px', border: '2px solid var(--border)',
+            borderRadius: 12, fontSize: 14, outline: 'none', background: 'var(--card)', transition: 'border-color 0.2s',
+          }}
+          onFocus={e => e.target.style.borderColor = 'var(--primary)'}
+          onBlur={e => e.target.style.borderColor = 'var(--border)'}
+        />
+        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingTop: 10, paddingBottom: 4 }}>
+          {CATEGORIES.map(c => (
+            <button key={c.id} onClick={() => { setActiveCat(c.id); setSearch(''); }} style={{
+              padding: '6px 14px', borderRadius: 20, border: 'none', cursor: 'pointer',
+              fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap',
+              background: activeCat === c.id ? 'var(--primary)' : 'var(--card)',
+              color: activeCat === c.id ? '#fff' : 'var(--text)',
+              boxShadow: 'var(--shadow)',
+            }}>{c.icon} {c.name}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10, marginTop: 8 }}>
+        {filtered.map(p => {
+          const qty = cartGetQty(cart, p.id);
+          const isInCart = qty > 0;
+          return (
+            <div key={p.id} onClick={!isInCart ? () => addItem(p.id) : undefined} style={{
+              background: 'var(--card)', borderRadius: 12, padding: '12px 14px',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              border: isInCart ? '2px solid var(--secondary)' : '1px solid var(--border)',
+              transition: 'all 0.2s', cursor: !isInCart ? 'pointer' : 'default',
+              boxShadow: isInCart ? '0 2px 8px rgba(45,106,79,0.12)' : 'none',
+              userSelect: 'none', WebkitTapHighlightColor: 'transparent',
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--secondary)', marginTop: 2 }}>{fmt(p.price)}</div>
+              </div>
+              {isInCart ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8, flexShrink: 0 }}>
+                  <button onClick={e => { e.stopPropagation(); removeItem(p.id); }} style={{
+                    width: 32, height: 32, borderRadius: '50%', border: '1px solid var(--danger)',
+                    background: 'var(--danger-light)', cursor: 'pointer', fontSize: 16,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--danger)', fontWeight: 700,
+                  }}>−</button>
+                  <span style={{ fontWeight: 800, fontSize: 16, minWidth: 24, textAlign: 'center' }}>{qty}</span>
+                  <button onClick={e => { e.stopPropagation(); addItem(p.id); }} style={{
+                    width: 32, height: 32, borderRadius: '50%', border: 'none',
+                    background: 'var(--secondary)', cursor: 'pointer', fontSize: 16,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700,
+                  }}>+</button>
+                </div>
+              ) : (
+                <div style={{
+                  marginLeft: 8, flexShrink: 0, fontSize: 12, fontWeight: 700,
+                  color: 'var(--text-light)', background: 'var(--bg)', borderRadius: 8, padding: '4px 10px',
+                }}>Agregar</div>
+              )}
+            </div>
+          );
+        })}
+        {filtered.length === 0 && (
+          <p style={{ gridColumn: '1 / -1', textAlign: 'center', color: 'var(--text-light)', padding: 40 }}>
+            No se encontraron productos
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Cart Summary ───
+function CartSummary({ cart, studentId, students, onConfirm, onClear }) {
+  const student = students.find(s => s.id === studentId);
+  const total = cartTotal(cart);
+  if (cart.length === 0) return null;
+  return (
+    <div className="slide-up" style={{
+      position: 'fixed', bottom: 0, left: 0, right: 0, background: 'var(--card)',
+      borderTop: '2px solid var(--border)', padding: '16px 20px',
+      boxShadow: '0 -4px 20px rgba(0,0,0,0.1)', zIndex: 100,
+    }}>
+      <div style={{ maxWidth: 960, margin: '0 auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>{student?.emoji} {student?.name}</span>
+            <span style={{ color: 'var(--text-light)', fontSize: 13, marginLeft: 8 }}>{cartItemCount(cart)} artículos</span>
+          </div>
+          <div style={{ fontFamily: "'Fredoka One', cursive", fontSize: 22, color: 'var(--secondary)' }}>{fmt(total)}</div>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 10, maxHeight: 60, overflowY: 'auto' }}>
+          {cart.map(i => { const p = PRODUCT_MAP[i.productId]; return <span key={i.productId}>{p.name} x{i.qty} ({fmt(p.price * i.qty)})&nbsp;·&nbsp;</span>; })}
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClear} style={{
+            flex: 1, padding: '12px', borderRadius: 10, border: '2px solid var(--border)',
+            background: 'var(--card)', cursor: 'pointer', fontWeight: 700, fontSize: 14, color: 'var(--text-light)',
+          }}>Cancelar</button>
+          <button onClick={onConfirm} style={{
+            flex: 2, padding: '12px', borderRadius: 10, border: 'none',
+            background: 'var(--secondary)', cursor: 'pointer', fontWeight: 700, fontSize: 14, color: '#fff',
+            boxShadow: '0 4px 12px rgba(45,106,79,0.3)',
+          }}>✓ Confirmar Pedido</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── New Order View ───
+function NewOrderView({ orders, setOrders, students, payments }) {
+  const [studentId, setStudentId] = useState(null);
+  const [cart, setCart] = useState([]);
+  const [toast, setToast] = useState(null);
+  const [filterType, setFilterType] = useState('transfer');
+
+  const handleFilterChange = (type) => { setFilterType(type); setStudentId(null); setCart([]); };
+
+  const confirm = async () => {
+    if (!studentId || cart.length === 0) return;
+    try {
+      const newOrder = await api.createOrder(studentId, cart);
+      setOrders(prev => [...prev, newOrder]);
+      const student = students.find(s => s.id === studentId);
+      setToast(`Pedido de ${student?.name || 'Alumno'} registrado (${fmt(newOrder.total)})`);
+      setCart([]);
+      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      alert(`No se pudo registrar el pedido: ${err.message}`);
+    }
+  };
+
+  return (
+    <div style={{ paddingBottom: cart.length > 0 ? 160 : 20 }}>
+      {toast && (
+        <div className="slide-up" style={{
+          position: 'fixed', top: 90, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--secondary)', color: '#fff', padding: '12px 24px',
+          borderRadius: 12, fontWeight: 700, fontSize: 14, zIndex: 200, boxShadow: 'var(--shadow-lg)',
+        }}>✓ {toast}</div>
+      )}
+      <StudentPicker selected={studentId} onSelect={setStudentId} students={students}
+        allStudents={students} orders={orders} payments={payments}
+        filterType={filterType} onFilterChange={handleFilterChange} />
+      {studentId && <div style={{ marginTop: 20 }}><MenuSection cart={cart} setCart={setCart} /></div>}
+      <CartSummary cart={cart} studentId={studentId} students={students} onConfirm={confirm} onClear={() => setCart([])} />
+    </div>
+  );
+}
+
+// ─── Today View ───
+function TodayView({ orders, setOrders, students }) {
+  const today = getToday();
+  const todayOrders = orders.filter(o => o.date === today);
+  const dayTotal = todayOrders.reduce((s, o) => s + o.total, 0);
+
+  const deleteOrder = async (orderId) => {
+    if (!confirm('¿Eliminar este pedido?')) return;
+    try {
+      await api.deleteOrder(orderId);
+      setOrders(prev => prev.filter(o => o.id !== orderId));
+    } catch (err) {
+      alert(`No se pudo eliminar el pedido: ${err.message}`);
+    }
+  };
+
+  const byStudent = {};
+  todayOrders.forEach(o => { if (!byStudent[o.studentId]) byStudent[o.studentId] = []; byStudent[o.studentId].push(o); });
+
+  return (
+    <div className="fade-in">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 8 }}>
+        <h2 style={{ fontSize: 18, fontWeight: 800 }}>📋 Pedidos de Hoy ({formatDate(today)})</h2>
+        <div style={{ background: 'var(--secondary-light)', padding: '8px 16px', borderRadius: 10, fontWeight: 800, color: 'var(--secondary)', fontSize: 16 }}>
+          Total: {fmt(dayTotal)}
+        </div>
+      </div>
+      {todayOrders.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-light)' }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🍽️</div>
+          <p style={{ fontWeight: 600 }}>No hay pedidos registrados hoy</p>
+        </div>
+      ) : (
+        Object.keys(byStudent).map(sid => {
+          const s = students.find(x => x.id === parseInt(sid));
+          const studentOrders = byStudent[sid];
+          const studentTotal = studentOrders.reduce((sum, o) => sum + o.total, 0);
+          return (
+            <div key={sid} style={{
+              background: 'var(--card)', borderRadius: 14, padding: 16, marginBottom: 12,
+              border: '1px solid var(--border)', boxShadow: 'var(--shadow)',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 22 }}>{s?.emoji}</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 15 }}>{s?.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-light)' }}>{s?.grade}</div>
+                  </div>
+                </div>
+                <div style={{ fontWeight: 800, color: 'var(--secondary)', fontSize: 16 }}>{fmt(studentTotal)}</div>
+              </div>
+              {studentOrders.map(o => (
+                <div key={o.id} style={{ background: 'var(--bg)', borderRadius: 10, padding: '10px 12px', marginBottom: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-light)', fontWeight: 600 }}>🕐 {o.time}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--primary)' }}>{fmt(o.total)}</span>
+                      <button onClick={() => deleteOrder(o.id)} style={{
+                        background: 'none', border: 'none', cursor: 'pointer', fontSize: 16,
+                        color: 'var(--danger)', padding: '2px 4px',
+                      }} title="Eliminar">🗑️</button>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 13 }}>
+                    {o.items.map((item, idx) => {
+                      const p = PRODUCT_MAP[item.productId];
+                      return (
+                        <span key={idx} style={{ marginRight: 8 }}>
+                          {p?.name} x{item.qty}
+                          <span style={{ color: 'var(--text-light)' }}> ({fmt(item.unitPrice * item.qty)})</span>
+                          {idx < o.items.length - 1 && ' · '}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+// ─── Payment Form (inline) ───
+function PaymentForm({ familyKey, onSubmit, onCancel }) {
+  const [amount, setAmount] = useState('');
+  const [method, setMethod] = useState('transfer');
+  const [note, setNote] = useState('');
+
+  const handleSubmit = async () => {
+    const num = parseFloat(amount);
+    if (!num || num <= 0) return;
+    await onSubmit({ familyKey, amount: num, method, note: note.trim() || null });
+    setAmount(''); setNote('');
+  };
+
+  return (
+    <div className="slide-up" style={{
+      background: 'var(--accent-light)', borderRadius: 10, padding: 14, marginTop: 8,
+      border: '1px solid var(--accent)',
+    }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'end' }}>
+        <div style={{ flex: '1 1 120px' }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>Monto</label>
+          <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="$0.00"
+            style={{
+              width: '100%', padding: '8px 12px', border: '2px solid var(--border)', borderRadius: 8,
+              fontSize: 14, outline: 'none', background: 'var(--card)',
+            }} />
+        </div>
+        <div style={{ flex: '1 1 120px' }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>Método</label>
+          <SegmentedControl options={[{ value: 'transfer', label: '💳 Transfer' }, { value: 'efectivo', label: '💵 Efectivo' }]}
+            value={method} onChange={setMethod} />
+        </div>
+        <div style={{ flex: '2 1 160px' }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>Nota (opcional)</label>
+          <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Ej: Pago quincenal"
+            style={{
+              width: '100%', padding: '8px 12px', border: '2px solid var(--border)', borderRadius: 8,
+              fontSize: 13, outline: 'none', background: 'var(--card)',
+            }} />
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+        <button onClick={onCancel} style={{
+          padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)',
+          background: 'var(--card)', cursor: 'pointer', fontWeight: 700, fontSize: 12, color: 'var(--text-light)',
+        }}>Cancelar</button>
+        <button onClick={handleSubmit} disabled={!amount || parseFloat(amount) <= 0} style={{
+          padding: '8px 20px', borderRadius: 8, border: 'none', cursor: 'pointer',
+          background: amount && parseFloat(amount) > 0 ? 'var(--secondary)' : 'var(--border)',
+          fontWeight: 700, fontSize: 12, color: '#fff',
+        }}>✓ Registrar Pago</button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ESTADO DE CUENTA VIEW
+// ═══════════════════════════════════════════════════════════════════════════
+
+function StatementView({ orders, students, payments, setPayments }) {
+  const [filterType, setFilterType] = useState('transfer');
+  const [periodMode, setPeriodMode] = useState('weekly'); // weekly | monthly | custom
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [monthOffset, setMonthOffset] = useState(0);
+  const [customStart, setCustomStart] = useState(getToday());
+  const [customEnd, setCustomEnd] = useState(getToday());
+  const [expanded, setExpanded] = useState({});
+  const [selectedForShare, setSelectedForShare] = useState({});
+  const [viewMode, setViewMode] = useState('complete'); // complete | compact
+  const [payingFor, setPayingFor] = useState(null); // familyKey being paid
+  const [toast, setToast] = useState(null);
+
+  const toggle = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+  const toggleShare = (key) => setSelectedForShare(prev => ({ ...prev, [key]: !prev[key] }));
+
+  // Period calculation
+  const period = useMemo(() => {
+    if (periodMode === 'weekly') {
+      const d = new Date();
+      d.setDate(d.getDate() + weekOffset * 7);
+      return getWeekRange(toLocalDateStr(d));
+    } else if (periodMode === 'monthly') {
+      const now = new Date();
+      const targetMonth = now.getMonth() + monthOffset;
+      const targetYear = now.getFullYear() + Math.floor(targetMonth / 12);
+      const m = ((targetMonth % 12) + 12) % 12;
+      return getMonthRange(targetYear, m);
+    } else {
+      return { start: customStart, end: customEnd };
+    }
+  }, [periodMode, weekOffset, monthOffset, customStart, customEnd]);
+
+  const periodLabel = useMemo(() => {
+    if (periodMode === 'weekly') {
+      return `${formatDate(period.start)} — ${formatDate(period.end)}`;
+    } else if (periodMode === 'monthly') {
+      const d = new Date(period.start + 'T12:00:00');
+      return `${MONTH_NAMES_FULL[d.getMonth()]} ${d.getFullYear()}`;
+    } else {
+      return `${formatDate(period.start)} — ${formatDate(period.end)}`;
+    }
+  }, [period, periodMode]);
+
+  const isCurrentPeriod = periodMode === 'weekly' ? weekOffset === 0 : periodMode === 'monthly' ? monthOffset === 0 : false;
+
+  const prevPeriod = () => {
+    if (periodMode === 'weekly') setWeekOffset(w => w - 1);
+    else if (periodMode === 'monthly') setMonthOffset(m => m - 1);
+  };
+  const nextPeriod = () => {
+    if (periodMode === 'weekly') setWeekOffset(w => w + 1);
+    else if (periodMode === 'monthly') setMonthOffset(m => m + 1);
+  };
+
+  const filteredStudents = students.filter(s => s.paymentType === filterType);
+  const periodOrders = orders.filter(o => o.date >= period.start && o.date <= period.end);
+
+  // Build family groups
+  const familyGroups = {};
+  filteredStudents.forEach(s => {
+    const key = getFamilyKey(s);
+    if (!familyGroups[key]) familyGroups[key] = [];
+    familyGroups[key].push(s);
+  });
+
+  // Only show families with activity or non-zero balance
+  const activeFamilyKeys = Object.keys(familyGroups).filter(fk => {
+    const members = familyGroups[fk];
+    const hasOrders = periodOrders.some(o => members.some(m => m.id === o.studentId));
+    const balance = computeBalance(fk, students, orders, payments);
+    return hasOrders || balance !== 0;
+  });
+
+  const periodTotal = activeFamilyKeys.reduce((sum, fk) => {
+    const members = familyGroups[fk];
+    return sum + periodOrders.filter(o => members.some(m => m.id === o.studentId)).reduce((s, o) => s + o.total, 0);
+  }, 0);
+
+  // WhatsApp sharing
+  const anySelected = Object.values(selectedForShare).some(v => v);
+
+  const handleShare = (format) => {
+    const studentsToShare = [];
+    Object.entries(selectedForShare).forEach(([key, sel]) => {
+      if (sel && familyGroups[key]) studentsToShare.push(...familyGroups[key]);
+    });
+    if (studentsToShare.length === 0) return;
+    const msg = format === 'complete'
+      ? buildWhatsAppComplete(studentsToShare, students, orders, payments, period)
+      : buildWhatsAppCompact(studentsToShare, students, orders, payments, period);
+    shareWhatsApp(msg);
+  };
+
+  // Register payment
+  const handlePayment = async (payment) => {
+    try {
+      const saved = await api.createPayment(payment);
+      setPayments(prev => [...prev, saved]);
+      setPayingFor(null);
+      setToast(`Pago de ${fmt(saved.amount)} registrado`);
+      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      alert(`No se pudo registrar el pago: ${err.message}`);
+    }
+  };
+
+  return (
+    <div className="fade-in">
+      {toast && (
+        <div className="slide-up" style={{
+          position: 'fixed', top: 90, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--secondary)', color: '#fff', padding: '12px 24px',
+          borderRadius: 12, fontWeight: 700, fontSize: 14, zIndex: 200, boxShadow: 'var(--shadow-lg)',
+        }}>✓ {toast}</div>
+      )}
+
+      {/* Controls bar */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
+        <h2 style={{ fontSize: 18, fontWeight: 800 }}>📊 Estado de Cuenta</h2>
+        <TypeToggle value={filterType} onChange={setFilterType} />
+      </div>
+
+      {/* Period + view mode controls */}
+      <div style={{
+        background: 'var(--card)', borderRadius: 12, padding: '12px 16px', marginBottom: 14,
+        boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 10,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <SegmentedControl
+            options={[{ value: 'weekly', label: 'Semanal' }, { value: 'monthly', label: 'Mensual' }, { value: 'custom', label: 'Periodo' }]}
+            value={periodMode} onChange={(v) => { setPeriodMode(v); setWeekOffset(0); setMonthOffset(0); }}
+          />
+          <SegmentedControl
+            options={[{ value: 'complete', label: '📋 Completo' }, { value: 'compact', label: '📄 Compacto' }]}
+            value={viewMode} onChange={setViewMode}
+          />
+        </div>
+
+        {periodMode !== 'custom' ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+            <button onClick={prevPeriod} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, padding: 4 }}>◀</button>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>{periodLabel}</div>
+              {isCurrentPeriod && (
+                <div style={{ fontSize: 12, color: 'var(--secondary)', fontWeight: 700 }}>
+                  {periodMode === 'weekly' ? 'Esta semana' : 'Este mes'}
+                </div>
+              )}
+            </div>
+            <button onClick={nextPeriod} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, padding: 4 }}>▶</button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-light)', display: 'block', marginBottom: 2 }}>Desde</label>
+              <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)}
+                style={{ padding: '6px 10px', border: '2px solid var(--border)', borderRadius: 8, fontSize: 13, outline: 'none' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-light)', display: 'block', marginBottom: 2 }}>Hasta</label>
+              <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)}
+                style={{ padding: '6px 10px', border: '2px solid var(--border)', borderRadius: 8, fontSize: 13, outline: 'none' }} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Totals bar */}
+      <div style={{
+        background: 'var(--accent-light)', borderRadius: 12, padding: '14px 20px', marginBottom: 14,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        <span style={{ fontWeight: 700, fontSize: 14 }}>Consumo del periodo ({filterType === 'transfer' ? 'Transfer' : 'Cole'})</span>
+        <span style={{ fontFamily: "'Fredoka One', cursive", fontSize: 22, color: 'var(--primary)' }}>{fmt(periodTotal)}</span>
+      </div>
+
+      {/* WhatsApp bar */}
+      {anySelected && (
+        <div className="slide-up" style={{
+          background: 'var(--secondary-light)', borderRadius: 12, padding: '12px 16px', marginBottom: 14,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+        }}>
+          <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--secondary)' }}>
+            {Object.values(selectedForShare).filter(v => v).length} seleccionado(s)
+          </span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={() => handleShare('compact')} style={{
+              padding: '8px 14px', borderRadius: 10, border: 'none', cursor: 'pointer',
+              background: '#25D366', color: '#fff', fontWeight: 700, fontSize: 12,
+            }}>📱 Compacto</button>
+            <button onClick={() => handleShare('complete')} style={{
+              padding: '8px 14px', borderRadius: 10, border: 'none', cursor: 'pointer',
+              background: '#128C7E', color: '#fff', fontWeight: 700, fontSize: 12,
+            }}>📱 Detallado</button>
+          </div>
+        </div>
+      )}
+
+      {/* Content */}
+      {activeFamilyKeys.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-light)' }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>📭</div>
+          <p style={{ fontWeight: 600 }}>Sin actividad en este periodo</p>
+        </div>
+      ) : (
+        activeFamilyKeys.map(fk => {
+          const members = familyGroups[fk];
+          const isFamily = members.length > 1 || (members[0]?.familyId != null);
+          const balance = computeBalance(fk, students, orders, payments);
+          const fkOrders = periodOrders.filter(o => members.some(m => m.id === o.studentId));
+          const fkConsumed = fkOrders.reduce((s, o) => s + o.total, 0);
+          const fkPaymentsList = computePeriodPayments(fk, payments, period.start, period.end);
+          const fkPaid = fkPaymentsList.reduce((s, p) => s + p.amount, 0);
+          const isShareSelected = selectedForShare[fk] || false;
+
+          return (
+            <div key={fk} style={{
+              background: isFamily ? 'var(--accent-light)' : 'transparent',
+              borderRadius: isFamily ? 16 : 0,
+              padding: isFamily ? '12px 10px 6px' : 0,
+              marginBottom: 14,
+            }}>
+              {/* Family header */}
+              {isFamily && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, padding: '0 6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button onClick={() => toggleShare(fk)} style={{
+                      width: 22, height: 22, borderRadius: 6, cursor: 'pointer',
+                      border: isShareSelected ? 'none' : '2px solid var(--border)',
+                      background: isShareSelected ? 'var(--secondary)' : 'var(--card)',
+                      color: '#fff', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>{isShareSelected ? '✓' : ''}</button>
+                    <span style={{ fontWeight: 800, fontSize: 14 }}>👨‍👩‍👧‍👦 Familia ({fk})</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <BalanceBadge amount={balance} />
+                    <button onClick={() => setPayingFor(payingFor === fk ? null : fk)} style={{
+                      padding: '4px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                      background: 'var(--secondary)', color: '#fff', fontWeight: 700, fontSize: 11,
+                    }}>💰 Pago</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Family payment form */}
+              {isFamily && payingFor === fk && (
+                <div style={{ padding: '0 6px', marginBottom: 8 }}>
+                  <PaymentForm familyKey={fk} onSubmit={handlePayment} onCancel={() => setPayingFor(null)} />
+                </div>
+              )}
+
+              {/* Period payments list for family */}
+              {isFamily && fkPaymentsList.length > 0 && (
+                <div style={{ padding: '0 6px', marginBottom: 8 }}>
+                  {fkPaymentsList.map(p => (
+                    <div key={p.id} style={{
+                      background: 'var(--secondary-light)', borderRadius: 8, padding: '6px 10px', marginBottom: 4,
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12,
+                    }}>
+                      <span>✅ Pago {p.method === 'transfer' ? '💳' : '💵'} {formatDateShort(p.date)} {p.note && `· ${p.note}`}</span>
+                      <span style={{ fontWeight: 800, color: 'var(--secondary)' }}>{fmt(p.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Student cards */}
+              {members.map(s => {
+                const data = fkOrders.filter(o => o.studentId === s.id);
+                if (data.length === 0 && balance === 0) return null;
+                const studentTotal = data.reduce((sum, o) => sum + o.total, 0);
+                const isOpen = expanded[s.id];
+                const byDate = {};
+                data.forEach(o => { if (!byDate[o.date]) byDate[o.date] = []; byDate[o.date].push(o); });
+
+                return (
+                  <div key={s.id} style={{
+                    background: 'var(--card)', borderRadius: 14, marginBottom: 10,
+                    border: '1px solid var(--border)', boxShadow: 'var(--shadow)', overflow: 'hidden',
+                  }}>
+                    <button onClick={() => toggle(s.id)} style={{
+                      width: '100%', padding: '14px 16px', background: 'none', border: 'none',
+                      cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', textAlign: 'left',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        {!isFamily && (
+                          <button onClick={e => { e.stopPropagation(); toggleShare(fk); }} style={{
+                            width: 22, height: 22, borderRadius: 6, cursor: 'pointer', flexShrink: 0,
+                            border: isShareSelected ? 'none' : '2px solid var(--border)',
+                            background: isShareSelected ? 'var(--secondary)' : 'var(--bg)',
+                            color: '#fff', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}>{isShareSelected ? '✓' : ''}</button>
+                        )}
+                        <span style={{ fontSize: 22 }}>{s.emoji}</span>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 15 }}>{s.name}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-light)' }}>
+                            {s.grade} · {data.length} pedido{data.length !== 1 ? 's' : ''}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {!isFamily && <BalanceBadge amount={balance} size="small" />}
+                        <span style={{ fontWeight: 800, fontSize: 17, color: 'var(--secondary)' }}>{fmt(studentTotal)}</span>
+                        {!isFamily && (
+                          <button onClick={e => { e.stopPropagation(); setPayingFor(payingFor === fk ? null : fk); }} style={{
+                            padding: '3px 8px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                            background: 'var(--secondary)', color: '#fff', fontWeight: 700, fontSize: 10,
+                          }}>💰</button>
+                        )}
+                        <span style={{ fontSize: 14, transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▼</span>
+                      </div>
+                    </button>
+
+                    {/* Individual payment form */}
+                    {!isFamily && payingFor === fk && (
+                      <div style={{ padding: '0 16px 10px' }}>
+                        <PaymentForm familyKey={fk} onSubmit={handlePayment} onCancel={() => setPayingFor(null)} />
+                      </div>
+                    )}
+
+                    {isOpen && (
+                      <div style={{ padding: '0 16px 14px', borderTop: '1px solid var(--border)' }}>
+                        {/* Period payments (individual only) */}
+                        {!isFamily && fkPaymentsList.length > 0 && (
+                          <div style={{ marginTop: 10 }}>
+                            {fkPaymentsList.map(p => (
+                              <div key={p.id} style={{
+                                background: 'var(--secondary-light)', borderRadius: 8, padding: '6px 10px', marginBottom: 4,
+                                display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12,
+                              }}>
+                                <span>✅ Pago {p.method === 'transfer' ? '💳' : '💵'} {formatDateShort(p.date)} {p.note && `· ${p.note}`}</span>
+                                <span style={{ fontWeight: 800, color: 'var(--secondary)' }}>{fmt(p.amount)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {viewMode === 'complete' ? (
+                          // COMPLETE VIEW: full detail by date
+                          Object.keys(byDate).sort().map(date => {
+                            const dayOrders = byDate[date];
+                            const dayTotal = dayOrders.reduce((s, o) => s + o.total, 0);
+                            return (
+                              <div key={date} style={{ marginTop: 12 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13, fontWeight: 700, color: 'var(--text-light)' }}>
+                                  <span>{formatDate(date)}</span>
+                                  <span>{fmt(dayTotal)}</span>
+                                </div>
+                                {dayOrders.map(o => (
+                                  <div key={o.id} style={{ background: 'var(--bg)', borderRadius: 8, padding: '8px 10px', marginBottom: 4, fontSize: 13 }}>
+                                    {o.items.map((item, idx) => {
+                                      const p = PRODUCT_MAP[item.productId];
+                                      return (
+                                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                                          <span>{p?.name} <span style={{ color: 'var(--text-light)' }}>x{item.qty}</span></span>
+                                          <span style={{ fontWeight: 600 }}>{fmt(item.unitPrice * item.qty)}</span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })
+                        ) : (
+                          // COMPACT VIEW: totals per date only
+                          <div style={{ marginTop: 12 }}>
+                            {Object.keys(byDate).sort().map(date => {
+                              const dayTotal = byDate[date].reduce((s, o) => s + o.total, 0);
+                              return (
+                                <div key={date} style={{
+                                  display: 'flex', justifyContent: 'space-between', padding: '6px 10px',
+                                  background: 'var(--bg)', borderRadius: 6, marginBottom: 3, fontSize: 13,
+                                }}>
+                                  <span style={{ fontWeight: 600 }}>{formatDateShort(date)}</span>
+                                  <span style={{ fontWeight: 700 }}>{fmt(dayTotal)}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        <div style={{
+                          marginTop: 12, paddingTop: 10, borderTop: '2px solid var(--border)',
+                          display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: 15,
+                        }}>
+                          <span>Total {s.name}</span>
+                          <span style={{ color: 'var(--secondary)' }}>{fmt(studentTotal)}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Family summary row */}
+              {isFamily && (
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', padding: '8px 12px',
+                  fontSize: 13, fontWeight: 700, color: 'var(--text-light)',
+                }}>
+                  <span>Consumo: {fmt(fkConsumed)}{fkPaid > 0 ? ` · Pagos: ${fmt(fkPaid)}` : ''}</span>
+                </div>
+              )}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+// ─── Register Student View ───
+function RegisterView({ students, setStudents }) {
+  const [name, setName] = useState('');
+  const [grade, setGrade] = useState('');
+  const [paymentType, setPaymentType] = useState('transfer');
+  const [familyId, setFamilyId] = useState('');
+  const [emoji, setEmoji] = useState('👦');
+  const [initialBalance, setInitialBalance] = useState('');
+  const [toast, setToast] = useState(null);
+
+  const existingFamilies = [...new Set(students.filter(s => s.familyId).map(s => s.familyId))];
+
+  const handleSubmit = async () => {
+    if (!name.trim() || !grade.trim()) return;
+    const bal = parseFloat(initialBalance) || 0;
+    const newStudentPayload = {
+      name: name.trim(), grade: grade.trim(), emoji, paymentType,
+      familyId: familyId.trim() || null,
+      initialBalance: bal,
+    };
+    try {
+      const newStudent = await api.createStudent(newStudentPayload);
+      setStudents(prev => [...prev, newStudent]);
+      setToast(`${newStudent.name} registrado como ${paymentType === 'transfer' ? 'Transfer' : 'Cole'}`);
+      setName(''); setGrade(''); setFamilyId(''); setInitialBalance('');
+      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      alert(`No se pudo registrar el alumno: ${err.message}`);
+    }
+  };
+
+  const inputStyle = {
+    width: '100%', padding: '12px 16px', border: '2px solid var(--border)', borderRadius: 12,
+    fontSize: 14, outline: 'none', background: 'var(--card)', transition: 'border-color 0.2s',
+  };
+  const labelStyle = { fontSize: 13, fontWeight: 700, color: 'var(--text-light)', marginBottom: 6, display: 'block' };
+
+  return (
+    <div className="fade-in">
+      {toast && (
+        <div className="slide-up" style={{
+          position: 'fixed', top: 90, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--secondary)', color: '#fff', padding: '12px 24px',
+          borderRadius: 12, fontWeight: 700, fontSize: 14, zIndex: 200, boxShadow: 'var(--shadow-lg)',
+        }}>✓ {toast}</div>
+      )}
+      <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 20 }}>👤 Alta de Alumno</h2>
+      <div style={{
+        background: 'var(--card)', borderRadius: 14, padding: 20,
+        border: '1px solid var(--border)', boxShadow: 'var(--shadow)', maxWidth: 480,
+      }}>
+        <div style={{ marginBottom: 16 }}>
+          <label style={labelStyle}>Icono</label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {['👦', '👧', '🧒'].map(e => (
+              <button key={e} onClick={() => setEmoji(e)} style={{
+                width: 44, height: 44, borderRadius: 10,
+                border: emoji === e ? '2px solid var(--primary)' : '2px solid var(--border)',
+                background: emoji === e ? 'var(--primary-light)' : 'var(--card)',
+                cursor: 'pointer', fontSize: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>{e}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={labelStyle}>Nombre completo</label>
+          <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ej: María López García" style={inputStyle}
+            onFocus={e => e.target.style.borderColor = 'var(--primary)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={labelStyle}>Grado y grupo</label>
+          <input type="text" value={grade} onChange={e => setGrade(e.target.value)} placeholder="Ej: 4°A" style={inputStyle}
+            onFocus={e => e.target.style.borderColor = 'var(--primary)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={labelStyle}>Tipo de pago</label>
+          <TypeToggle value={paymentType} onChange={setPaymentType} style={{ width: 'fit-content' }} />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={labelStyle}>Grupo familiar (opcional)</label>
+          <input type="text" value={familyId} onChange={e => setFamilyId(e.target.value)} placeholder="Ej: FAM-001" style={inputStyle}
+            onFocus={e => e.target.style.borderColor = 'var(--primary)'} onBlur={e => e.target.style.borderColor = 'var(--border)'}
+            list="family-list" />
+          <datalist id="family-list">{existingFamilies.map(f => <option key={f} value={f} />)}</datalist>
+          {familyId && existingFamilies.includes(familyId) && (
+            <div style={{ marginTop: 6, fontSize: 12, color: 'var(--secondary)', fontWeight: 600 }}>
+              👨‍👩‍👧‍👦 Miembros: {students.filter(s => s.familyId === familyId).map(s => s.name).join(', ')}
+            </div>
+          )}
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <label style={labelStyle}>Saldo inicial (positivo = a favor, negativo = adeudo)</label>
+          <input type="number" value={initialBalance} onChange={e => setInitialBalance(e.target.value)} placeholder="0" style={inputStyle}
+            onFocus={e => e.target.style.borderColor = 'var(--primary)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
+        </div>
+        <button onClick={handleSubmit} disabled={!name.trim() || !grade.trim()} style={{
+          width: '100%', padding: '14px', borderRadius: 12, border: 'none',
+          background: name.trim() && grade.trim() ? 'var(--secondary)' : 'var(--border)',
+          color: '#fff', fontWeight: 800, fontSize: 15,
+          cursor: name.trim() && grade.trim() ? 'pointer' : 'not-allowed',
+          boxShadow: name.trim() && grade.trim() ? '0 4px 12px rgba(45,106,79,0.3)' : 'none',
+        }}>✓ Registrar Alumno</button>
+      </div>
+
+      <h3 style={{ fontSize: 15, fontWeight: 800, marginTop: 28, marginBottom: 12 }}>
+        Alumnos registrados ({students.length})
+      </h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
+        {students.map(s => (
+          <div key={s.id} style={{
+            background: 'var(--card)', borderRadius: 10, padding: '10px 12px',
+            border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
+          }}>
+            <span style={{ fontSize: 20 }}>{s.emoji}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
+              <div style={{ color: 'var(--text-light)', fontSize: 11 }}>
+                {s.grade} · {s.paymentType === 'transfer' ? '💳' : '🏫'}
+                {s.familyId && ` · ${s.familyId}`}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// APP ROOT
+// ═══════════════════════════════════════════════════════════════════════════
+
+function App() {
+  const [view, setView] = useState('order');
+  const [orders, setOrders] = useState([]);
+  const [students, setStudents] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+
+  const loadState = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const state = await api.getState();
+      setOrders(state.orders || []);
+      setStudents(state.students || []);
+      setPayments(state.payments || []);
+    } catch (err) {
+      setLoadError(err.message || 'Error de conexión');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadState(); }, [loadState]);
+
+  const todayCartCount = useMemo(() => orders.filter(o => o.date === getToday()).length, [orders]);
+
+  if (isLoading) {
+    return (
+      <main style={{ maxWidth: 960, margin: '0 auto', padding: '40px 16px', textAlign: 'center' }}>
+        <h2 style={{ fontSize: 22, marginBottom: 8 }}>Cargando cafetería...</h2>
+        <p style={{ color: 'var(--text-light)' }}>Conectando con base de datos</p>
+      </main>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <main style={{ maxWidth: 960, margin: '0 auto', padding: '40px 16px', textAlign: 'center' }}>
+        <h2 style={{ fontSize: 22, marginBottom: 8 }}>No se pudo conectar</h2>
+        <p style={{ color: 'var(--danger)', marginBottom: 16 }}>{loadError}</p>
+        <button onClick={loadState} style={{
+          padding: '10px 16px', border: 'none', borderRadius: 10, cursor: 'pointer',
+          background: 'var(--secondary)', color: '#fff', fontWeight: 700,
+        }}>Reintentar</button>
+      </main>
+    );
+  }
+
+  return (
+    <div>
+      <Header view={view} setView={setView} orderCount={todayCartCount} />
+      <main style={{ maxWidth: 960, margin: '0 auto', padding: '20px 16px' }}>
+        {view === 'register' && <RegisterView students={students} setStudents={setStudents} />}
+        {view === 'order' && <NewOrderView orders={orders} setOrders={setOrders} students={students} payments={payments} />}
+        {view === 'today' && <TodayView orders={orders} setOrders={setOrders} students={students} />}
+        {view === 'statement' && <StatementView orders={orders} students={students} payments={payments} setPayments={setPayments} />}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
