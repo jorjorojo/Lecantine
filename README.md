@@ -33,6 +33,7 @@ Notas:
 
 - Con SQLite + Volume se usa 1 sola instancia (ideal para 2 usuarios y baja carga).
 - Con volume, un redeploy puede tener unos segundos de downtime.
+- Zona horaria recomendada: `APP_TIMEZONE=America/Monterrey`.
 
 ## Robustez validada
 

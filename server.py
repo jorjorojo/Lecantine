@@ -10,6 +10,7 @@ import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 ROOT_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = ROOT_DIR / "data" / "cafeteria.db"
@@ -23,6 +24,7 @@ WRITE_LOCK = threading.Lock()
 ENABLE_HOURLY_BACKUP = True
 AUTH_USER = os.getenv("BASIC_AUTH_USER", "")
 AUTH_PASS = os.getenv("BASIC_AUTH_PASS", "")
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Monterrey")
 
 
 PRODUCTS = {
@@ -82,12 +84,19 @@ DEFAULT_STUDENTS = [
 ]
 
 
+def app_now() -> dt.datetime:
+    try:
+        return dt.datetime.now(ZoneInfo(APP_TIMEZONE))
+    except Exception:
+        return dt.datetime.now(dt.timezone.utc)
+
+
 def local_date() -> str:
-    return dt.date.today().isoformat()
+    return app_now().date().isoformat()
 
 
 def local_time() -> str:
-    return dt.datetime.now().strftime("%H:%M")
+    return app_now().strftime("%H:%M")
 
 
 def db_connection() -> sqlite3.Connection:
@@ -163,7 +172,7 @@ def maybe_hourly_backup() -> None:
         return
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    hour_key = dt.datetime.now().strftime("%Y%m%d_%H")
+    hour_key = app_now().strftime("%Y%m%d_%H")
     backup_path = BACKUP_DIR / f"cafeteria_{hour_key}.db"
     if backup_path.exists():
         return
@@ -180,7 +189,7 @@ def maybe_hourly_backup() -> None:
 
 def force_backup() -> Path:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = app_now().strftime("%Y%m%d_%H%M%S")
     backup_path = BACKUP_DIR / f"cafeteria_manual_{stamp}.db"
     with sqlite3.connect(DB_PATH) as source:
         with sqlite3.connect(backup_path) as target:
@@ -294,6 +303,20 @@ def parse_json(body: bytes) -> dict:
     raise ValueError("JSON inválido.")
 
 
+def validate_iso_date(value: str, field_name: str) -> str:
+    try:
+        dt.date.fromisoformat(value)
+        return value
+    except Exception:
+        raise ValueError(f"{field_name} inválida. Usa formato YYYY-MM-DD.")
+
+
+def validate_time_hhmm(value: str, field_name: str) -> str:
+    if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value):
+        raise ValueError(f"{field_name} inválida. Usa formato HH:MM.")
+    return value
+
+
 class CafeteriaHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT_DIR), **kwargs)
@@ -349,7 +372,7 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
             return
 
         if parsed.path == "/api/health":
-            self.send_json(200, {"ok": True, "date": local_date()})
+            self.send_json(200, {"ok": True, "date": local_date(), "timezone": APP_TIMEZONE})
             return
 
         if parsed.path == "/api/state":
@@ -402,6 +425,8 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
         payload = self.read_json_body()
         student_id = payload.get("studentId")
         cart = payload.get("cart")
+        requested_date = payload.get("date")
+        requested_time = payload.get("time")
 
         if not isinstance(student_id, int) or student_id <= 0:
             raise ValueError("studentId inválido.")
@@ -423,8 +448,8 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
             normalized_items.append({"productId": product_id, "qty": qty, "unitPrice": unit_price})
             total += unit_price * qty
 
-        order_date = local_date()
-        order_time = local_time()
+        order_date = validate_iso_date(str(requested_date), "Fecha") if requested_date is not None else local_date()
+        order_time = validate_time_hhmm(str(requested_time), "Hora") if requested_time is not None else local_time()
 
         with WRITE_LOCK:
             with db_connection() as conn:
@@ -531,6 +556,7 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
         method = str(payload.get("method", "transfer")).strip()
         note = payload.get("note")
         amount = payload.get("amount", 0)
+        requested_date = payload.get("date")
 
         if not family_key:
             raise ValueError("familyKey es obligatorio.")
@@ -546,7 +572,7 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
         if note is not None:
             note = str(note).strip() or None
 
-        payment_date = local_date()
+        payment_date = validate_iso_date(str(requested_date), "Fecha") if requested_date is not None else local_date()
         with WRITE_LOCK:
             with db_connection() as conn:
                 cur = conn.execute(
