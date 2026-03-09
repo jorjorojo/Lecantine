@@ -12,6 +12,7 @@ Se mantuvo el diseño del frontend prototipo y se agregó persistencia real con 
 - Permite editar/eliminar alumnos, pedidos y pagos.
 - Incluye buscador de alumnos (alta y selección de alumno).
 - Incluye buscador rápido en Estado de Cuenta y export CSV del periodo.
+- Si se borra todo en producción, no vuelve a sembrar alumnos dummy al reiniciar.
 
 ## Producción real (Internet público)
 
@@ -90,3 +91,17 @@ Checklist mínima semanal:
    ```bash
    python3 tests/robustness_simulation.py --port 8095
    ```
+
+## Arranque en Cero (producción real)
+
+Si quieres limpiar todo para empezar desde cero:
+
+```bash
+python3 tests/reset_live_data.py --base-url https://TU-DOMINIO --user "$BASIC_AUTH_USER" --password "$BASIC_AUTH_PASS"
+```
+
+Qué hace:
+
+1. Guarda snapshot local previo.
+2. Elimina pagos, pedidos y alumnos.
+3. Verifica conteos finales en cero.

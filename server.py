@@ -153,19 +153,45 @@ def init_db() -> None:
                 note TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS app_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_orders_student_date ON orders(student_id, order_date);
             CREATE INDEX IF NOT EXISTS idx_payments_family_date ON payments(family_key, payment_date);
             """
         )
 
+        seeded_row = conn.execute(
+            "SELECT value FROM app_meta WHERE key = 'seeded_defaults'"
+        ).fetchone()
+        seeded_defaults = bool(seeded_row and seeded_row["value"] == "1")
         count = conn.execute("SELECT COUNT(*) AS c FROM students").fetchone()["c"]
-        if count == 0:
+        if count == 0 and not seeded_defaults:
             conn.executemany(
                 """
                 INSERT INTO students (name, grade, emoji, payment_type, family_id, initial_balance)
                 VALUES (:name, :grade, :emoji, :paymentType, :familyId, :initialBalance)
                 """,
                 DEFAULT_STUDENTS,
+            )
+            conn.execute(
+                """
+                INSERT INTO app_meta (key, value)
+                VALUES ('seeded_defaults', '1')
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """
+            )
+        elif count > 0 and not seeded_defaults:
+            # Existing DB already has student records; mark as initialized to avoid
+            # re-seeding defaults if someone later wipes students intentionally.
+            conn.execute(
+                """
+                INSERT INTO app_meta (key, value)
+                VALUES ('seeded_defaults', '1')
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """
             )
         conn.commit()
 
