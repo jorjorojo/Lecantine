@@ -203,6 +203,11 @@ const api = {
     method: 'POST',
     body: JSON.stringify(payment),
   }),
+  updatePayment: (paymentId, payload) => apiRequest(`/api/payments/${paymentId}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  }),
+  deletePayment: (paymentId) => apiRequest(`/api/payments/${paymentId}`, { method: 'DELETE' }),
   createStudent: (student) => apiRequest('/api/students', {
     method: 'POST',
     body: JSON.stringify(student),
@@ -844,16 +849,43 @@ function TodayView({ orders, setOrders, students, onEditOrder }) {
 }
 
 // ─── Payment Form (inline) ───
-function PaymentForm({ familyKey, onSubmit, onCancel }) {
+function PaymentForm({ familyKey, initialPayment = null, onSubmit, onCancel }) {
+  const [localFamilyKey, setLocalFamilyKey] = useState(familyKey || '');
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('transfer');
   const [note, setNote] = useState('');
+  const [date, setDate] = useState(getToday());
+  const isEdit = Boolean(initialPayment);
+
+  useEffect(() => {
+    setLocalFamilyKey(initialPayment?.familyKey || familyKey || '');
+    setAmount(initialPayment ? String(initialPayment.amount ?? '') : '');
+    setMethod(initialPayment?.method || 'transfer');
+    setNote(initialPayment?.note || '');
+    setDate(initialPayment?.date || getToday());
+  }, [familyKey, initialPayment]);
 
   const handleSubmit = async () => {
     const num = parseFloat(amount);
+    if (!localFamilyKey.trim()) return;
     if (!num || num <= 0) return;
-    await onSubmit({ familyKey, amount: num, method, note: note.trim() || null });
-    setAmount(''); setNote('');
+    if (!date) return;
+
+    const payload = {
+      familyKey: localFamilyKey.trim(),
+      amount: num,
+      method,
+      note: note.trim() || null,
+      date,
+    };
+    if (isEdit) payload.id = initialPayment.id;
+    await onSubmit(payload);
+
+    if (!isEdit) {
+      setAmount('');
+      setNote('');
+      setDate(getToday());
+    }
   };
 
   return (
@@ -862,12 +894,28 @@ function PaymentForm({ familyKey, onSubmit, onCancel }) {
       border: '1px solid var(--accent)',
     }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'end' }}>
+        <div style={{ flex: '1 1 140px' }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>Cuenta</label>
+          <input type="text" value={localFamilyKey} onChange={e => setLocalFamilyKey(e.target.value)} placeholder="Ej: FAM-001"
+            style={{
+              width: '100%', padding: '8px 12px', border: '2px solid var(--border)', borderRadius: 8,
+              fontSize: 13, outline: 'none', background: 'var(--card)',
+            }} />
+        </div>
         <div style={{ flex: '1 1 120px' }}>
           <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>Monto</label>
           <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="$0.00"
             style={{
               width: '100%', padding: '8px 12px', border: '2px solid var(--border)', borderRadius: 8,
               fontSize: 14, outline: 'none', background: 'var(--card)',
+            }} />
+        </div>
+        <div style={{ flex: '1 1 130px' }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>Fecha</label>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)}
+            style={{
+              width: '100%', padding: '8px 12px', border: '2px solid var(--border)', borderRadius: 8,
+              fontSize: 13, outline: 'none', background: 'var(--card)',
             }} />
         </div>
         <div style={{ flex: '1 1 120px' }}>
@@ -889,11 +937,13 @@ function PaymentForm({ familyKey, onSubmit, onCancel }) {
           padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)',
           background: 'var(--card)', cursor: 'pointer', fontWeight: 700, fontSize: 12, color: 'var(--text-light)',
         }}>Cancelar</button>
-        <button onClick={handleSubmit} disabled={!amount || parseFloat(amount) <= 0} style={{
-          padding: '8px 20px', borderRadius: 8, border: 'none', cursor: 'pointer',
-          background: amount && parseFloat(amount) > 0 ? 'var(--secondary)' : 'var(--border)',
-          fontWeight: 700, fontSize: 12, color: '#fff',
-        }}>✓ Registrar Pago</button>
+        <button onClick={handleSubmit}
+          disabled={!localFamilyKey.trim() || !amount || parseFloat(amount) <= 0 || !date}
+          style={{
+            padding: '8px 20px', borderRadius: 8, border: 'none', cursor: 'pointer',
+            background: localFamilyKey.trim() && amount && parseFloat(amount) > 0 && date ? 'var(--secondary)' : 'var(--border)',
+            fontWeight: 700, fontSize: 12, color: '#fff',
+          }}>{isEdit ? '✓ Guardar Pago' : '✓ Registrar Pago'}</button>
       </div>
     </div>
   );
@@ -914,6 +964,7 @@ function StatementView({ orders, students, payments, setPayments }) {
   const [selectedForShare, setSelectedForShare] = useState({});
   const [viewMode, setViewMode] = useState('complete'); // complete | compact
   const [payingFor, setPayingFor] = useState(null); // familyKey being paid
+  const [editingPayment, setEditingPayment] = useState(null); // payment object being edited
   const [toast, setToast] = useState(null);
 
   const toggle = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
@@ -998,16 +1049,42 @@ function StatementView({ orders, students, payments, setPayments }) {
     shareWhatsApp(msg);
   };
 
-  // Register payment
-  const handlePayment = async (payment) => {
+  // Create/update payment
+  const handlePaymentSubmit = async (payment) => {
     try {
-      const saved = await api.createPayment(payment);
-      setPayments(prev => [...prev, saved]);
-      setPayingFor(null);
-      setToast(`Pago de ${fmt(saved.amount)} registrado`);
+      if (payment.id) {
+        const updated = await api.updatePayment(payment.id, {
+          familyKey: payment.familyKey,
+          amount: payment.amount,
+          date: payment.date,
+          method: payment.method,
+          note: payment.note,
+        });
+        setPayments(prev => prev.map(p => p.id === updated.id ? updated : p));
+        setEditingPayment(null);
+        setToast(`Pago de ${fmt(updated.amount)} actualizado`);
+      } else {
+        const saved = await api.createPayment(payment);
+        setPayments(prev => [...prev, saved]);
+        setPayingFor(null);
+        setToast(`Pago de ${fmt(saved.amount)} registrado`);
+      }
       setTimeout(() => setToast(null), 3000);
     } catch (err) {
-      alert(`No se pudo registrar el pago: ${err.message}`);
+      alert(`No se pudo guardar el pago: ${err.message}`);
+    }
+  };
+
+  const handleDeletePayment = async (paymentId) => {
+    if (!confirm('¿Eliminar este pago?')) return;
+    try {
+      await api.deletePayment(paymentId);
+      setPayments(prev => prev.filter(p => p.id !== paymentId));
+      if (editingPayment?.id === paymentId) setEditingPayment(null);
+      setToast('Pago eliminado');
+      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      alert(`No se pudo eliminar el pago: ${err.message}`);
     }
   };
 
@@ -1141,7 +1218,7 @@ function StatementView({ orders, students, payments, setPayments }) {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <BalanceBadge amount={balance} />
-                    <button onClick={() => setPayingFor(payingFor === fk ? null : fk)} style={{
+                    <button onClick={() => { setEditingPayment(null); setPayingFor(payingFor === fk ? null : fk); }} style={{
                       padding: '4px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
                       background: 'var(--secondary)', color: '#fff', fontWeight: 700, fontSize: 11,
                     }}>💰 Pago</button>
@@ -1152,7 +1229,19 @@ function StatementView({ orders, students, payments, setPayments }) {
               {/* Family payment form */}
               {isFamily && payingFor === fk && (
                 <div style={{ padding: '0 6px', marginBottom: 8 }}>
-                  <PaymentForm familyKey={fk} onSubmit={handlePayment} onCancel={() => setPayingFor(null)} />
+                  <PaymentForm familyKey={fk} onSubmit={handlePaymentSubmit} onCancel={() => setPayingFor(null)} />
+                </div>
+              )}
+
+              {/* Family payment edit form */}
+              {isFamily && editingPayment && editingPayment.familyKey === fk && (
+                <div style={{ padding: '0 6px', marginBottom: 8 }}>
+                  <PaymentForm
+                    familyKey={fk}
+                    initialPayment={editingPayment}
+                    onSubmit={handlePaymentSubmit}
+                    onCancel={() => setEditingPayment(null)}
+                  />
                 </div>
               )}
 
@@ -1165,7 +1254,17 @@ function StatementView({ orders, students, payments, setPayments }) {
                       display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12,
                     }}>
                       <span>✅ Pago {p.method === 'transfer' ? '💳' : '💵'} {formatDateShort(p.date)} {p.note && `· ${p.note}`}</span>
-                      <span style={{ fontWeight: 800, color: 'var(--secondary)' }}>{fmt(p.amount)}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontWeight: 800, color: 'var(--secondary)' }}>{fmt(p.amount)}</span>
+                        <button onClick={() => { setPayingFor(null); setEditingPayment(p); }} style={{
+                          background: 'none', border: 'none', cursor: 'pointer', fontSize: 14,
+                          color: 'var(--primary)', padding: 0,
+                        }} title="Editar pago">✏️</button>
+                        <button onClick={() => handleDeletePayment(p.id)} style={{
+                          background: 'none', border: 'none', cursor: 'pointer', fontSize: 14,
+                          color: 'var(--danger)', padding: 0,
+                        }} title="Eliminar pago">🗑️</button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1210,7 +1309,7 @@ function StatementView({ orders, students, payments, setPayments }) {
                         {!isFamily && <BalanceBadge amount={balance} size="small" />}
                         <span style={{ fontWeight: 800, fontSize: 17, color: 'var(--secondary)' }}>{fmt(studentTotal)}</span>
                         {!isFamily && (
-                          <button onClick={e => { e.stopPropagation(); setPayingFor(payingFor === fk ? null : fk); }} style={{
+                          <button onClick={e => { e.stopPropagation(); setEditingPayment(null); setPayingFor(payingFor === fk ? null : fk); }} style={{
                             padding: '3px 8px', borderRadius: 6, border: 'none', cursor: 'pointer',
                             background: 'var(--secondary)', color: '#fff', fontWeight: 700, fontSize: 10,
                           }}>💰</button>
@@ -1222,7 +1321,19 @@ function StatementView({ orders, students, payments, setPayments }) {
                     {/* Individual payment form */}
                     {!isFamily && payingFor === fk && (
                       <div style={{ padding: '0 16px 10px' }}>
-                        <PaymentForm familyKey={fk} onSubmit={handlePayment} onCancel={() => setPayingFor(null)} />
+                        <PaymentForm familyKey={fk} onSubmit={handlePaymentSubmit} onCancel={() => setPayingFor(null)} />
+                      </div>
+                    )}
+
+                    {/* Individual payment edit form */}
+                    {!isFamily && editingPayment && editingPayment.familyKey === fk && (
+                      <div style={{ padding: '0 16px 10px' }}>
+                        <PaymentForm
+                          familyKey={fk}
+                          initialPayment={editingPayment}
+                          onSubmit={handlePaymentSubmit}
+                          onCancel={() => setEditingPayment(null)}
+                        />
                       </div>
                     )}
 
@@ -1237,7 +1348,17 @@ function StatementView({ orders, students, payments, setPayments }) {
                                 display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12,
                               }}>
                                 <span>✅ Pago {p.method === 'transfer' ? '💳' : '💵'} {formatDateShort(p.date)} {p.note && `· ${p.note}`}</span>
-                                <span style={{ fontWeight: 800, color: 'var(--secondary)' }}>{fmt(p.amount)}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <span style={{ fontWeight: 800, color: 'var(--secondary)' }}>{fmt(p.amount)}</span>
+                                  <button onClick={() => { setPayingFor(null); setEditingPayment(p); }} style={{
+                                    background: 'none', border: 'none', cursor: 'pointer', fontSize: 14,
+                                    color: 'var(--primary)', padding: 0,
+                                  }} title="Editar pago">✏️</button>
+                                  <button onClick={() => handleDeletePayment(p.id)} style={{
+                                    background: 'none', border: 'none', cursor: 'pointer', fontSize: 14,
+                                    color: 'var(--danger)', padding: 0,
+                                  }} title="Eliminar pago">🗑️</button>
+                                </div>
                               </div>
                             ))}
                           </div>

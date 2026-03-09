@@ -448,6 +448,11 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 student_id = int(match.group(1))
                 return self.handle_update_student(student_id)
 
+            match = re.fullmatch(r"/api/payments/(\d+)", parsed.path)
+            if match:
+                payment_id = int(match.group(1))
+                return self.handle_update_payment(payment_id)
+
             self.send_json(404, {"error": "Ruta no encontrada."})
         except ValueError as exc:
             self.send_json(400, {"error": str(exc)})
@@ -477,6 +482,11 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 if reassign_to_raw is not None and str(reassign_to_raw).strip():
                     reassign_to = int(str(reassign_to_raw).strip())
                 return self.handle_delete_student(student_id, reassign_to=reassign_to, purge_orders=purge_orders)
+
+            match = re.fullmatch(r"/api/payments/(\d+)", parsed.path)
+            if match:
+                payment_id = int(match.group(1))
+                return self.handle_delete_payment(payment_id)
 
             self.send_json(404, {"error": "Ruta no encontrada."})
         except ValueError as exc:
@@ -961,6 +971,102 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 "note": note,
             },
         )
+
+    def handle_update_payment(self, payment_id: int):
+        if payment_id <= 0:
+            raise ValueError("paymentId inválido.")
+
+        payload = self.read_json_body()
+        if not isinstance(payload, dict) or len(payload) == 0:
+            raise ValueError("Se requiere al menos un campo para editar el pago.")
+
+        with WRITE_LOCK:
+            with db_connection() as conn:
+                current = conn.execute(
+                    """
+                    SELECT id, family_key, amount, payment_date, method, note
+                    FROM payments
+                    WHERE id = ?
+                    """,
+                    (payment_id,),
+                ).fetchone()
+                if not current:
+                    self.send_json(404, {"error": "Pago no encontrado."})
+                    return
+
+                if "familyKey" in payload:
+                    family_key = str(payload.get("familyKey", "")).strip()
+                else:
+                    family_key = current["family_key"]
+                if not family_key:
+                    raise ValueError("familyKey es obligatorio.")
+
+                if "method" in payload:
+                    method = str(payload.get("method", "")).strip()
+                else:
+                    method = current["method"]
+                if method not in {"transfer", "efectivo"}:
+                    raise ValueError("Método de pago inválido.")
+
+                if "amount" in payload:
+                    try:
+                        amount = float(payload.get("amount", 0))
+                    except (TypeError, ValueError):
+                        raise ValueError("Monto inválido.")
+                else:
+                    amount = float(current["amount"])
+                if amount <= 0:
+                    raise ValueError("El monto debe ser mayor a 0.")
+
+                if "note" in payload:
+                    note = payload.get("note")
+                    if note is not None:
+                        note = str(note).strip() or None
+                else:
+                    note = current["note"]
+
+                if "date" in payload:
+                    payment_date = validate_iso_date(str(payload.get("date")), "Fecha")
+                else:
+                    payment_date = current["payment_date"]
+
+                conn.execute(
+                    """
+                    UPDATE payments
+                    SET family_key = ?, amount = ?, payment_date = ?, method = ?, note = ?
+                    WHERE id = ?
+                    """,
+                    (family_key, amount, payment_date, method, note, payment_id),
+                )
+                conn.commit()
+            maybe_hourly_backup()
+
+        self.send_json(
+            200,
+            {
+                "id": payment_id,
+                "familyKey": family_key,
+                "amount": round(amount, 2),
+                "date": payment_date,
+                "method": method,
+                "note": note,
+            },
+        )
+
+    def handle_delete_payment(self, payment_id: int):
+        if payment_id <= 0:
+            raise ValueError("paymentId inválido.")
+
+        with WRITE_LOCK:
+            with db_connection() as conn:
+                cur = conn.execute("DELETE FROM payments WHERE id = ?", (payment_id,))
+                conn.commit()
+                if cur.rowcount == 0:
+                    self.send_json(404, {"error": "Pago no encontrado."})
+                    return
+            maybe_hourly_backup()
+
+        self.send_json(200, {"ok": True})
 
 
 def parse_args() -> argparse.Namespace:

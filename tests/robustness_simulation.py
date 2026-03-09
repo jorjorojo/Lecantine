@@ -161,6 +161,34 @@ def run_vertical_flow(base_url: str):
         },
     )
     assert payment["id"] > 0, "No se creó pago"
+    updated_payment = request_json(
+        base_url,
+        "PUT",
+        f"/api/payments/{payment['id']}",
+        {
+            "familyKey": f"ind-{new_student['id']}",
+            "amount": 130,
+            "date": health["date"],
+            "method": "transfer",
+            "note": "Pago prueba editado",
+        },
+    )
+    assert updated_payment["id"] == payment["id"], "No se actualizó pago"
+    assert round(updated_payment["amount"], 2) == 130.0, "Monto de pago editado inválido"
+
+    payment_to_delete = request_json(
+        base_url,
+        "POST",
+        "/api/payments",
+        {
+            "familyKey": f"ind-{new_student['id']}",
+            "amount": 55,
+            "method": "efectivo",
+            "note": "Pago para borrar",
+        },
+    )
+    deleted_payment = request_json(base_url, "DELETE", f"/api/payments/{payment_to_delete['id']}")
+    assert deleted_payment.get("ok") is True, "No se eliminó pago"
 
     deleted = request_json(base_url, "DELETE", f"/api/orders/{new_order['id']}")
     assert deleted.get("ok") is True, "No se eliminó pedido"
@@ -168,7 +196,8 @@ def run_vertical_flow(base_url: str):
     state2 = request_json(base_url, "GET", "/api/state")
     assert len(state2["students"]) == initial_students + 1, "No persistió alta de alumno"
     assert not any(o["id"] == new_order["id"] for o in state2["orders"]), "Pedido eliminado sigue presente"
-    assert any(p["id"] == payment["id"] for p in state2["payments"]), "Pago no persistió"
+    assert any(p["id"] == payment["id"] for p in state2["payments"]), "Pago editado no persistió"
+    assert not any(p["id"] == payment_to_delete["id"] for p in state2["payments"]), "Pago eliminado sigue presente"
 
 
 def simulate_ops(base_url: str, students: list, num_ops: int, seed: int):
