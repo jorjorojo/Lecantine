@@ -231,6 +231,29 @@ const api = {
     }
     return await res.blob();
   },
+  listDailyCsv: (limit = 60) => apiRequest(`/api/daily-csv?limit=${encodeURIComponent(String(limit))}`),
+  generateDailyCsv: (date) => apiRequest('/api/daily-csv/generate', {
+    method: 'POST',
+    body: JSON.stringify(date ? { date } : {}),
+  }),
+  downloadDailyCsv: async (date) => {
+    const params = new URLSearchParams();
+    params.set('date', date);
+    const res = await fetch(`/api/daily-csv/download?${params.toString()}`);
+    if (!res.ok) {
+      let msg = `Error ${res.status}`;
+      try {
+        const err = await res.json();
+        if (err?.error) msg = err.error;
+      } catch {}
+      throw new Error(msg);
+    }
+    const cd = res.headers.get('Content-Disposition') || '';
+    let filename = `estado_cuenta_${date}_all.csv`;
+    const match = cd.match(/filename=\"?([^\";]+)\"?/i);
+    if (match && match[1]) filename = match[1];
+    return { blob: await res.blob(), filename };
+  },
   createStudent: (student) => apiRequest('/api/students', {
     method: 'POST',
     body: JSON.stringify(student),
@@ -451,6 +474,7 @@ function Header({ view, setView, orderCount }) {
     { id: 'order', label: 'Nueva Orden', icon: '🛒' },
     { id: 'today', label: 'Hoy', icon: '📋' },
     { id: 'statement', label: 'Estado de Cuenta', icon: '📊' },
+    { id: 'dailycsv', label: 'CSV Diario', icon: '🗂️' },
   ];
   return (
     <header style={{
@@ -1783,6 +1807,158 @@ function RegisterView({ students, setStudents }) {
   );
 }
 
+// ─── Daily CSV View ───
+function DailyCsvView() {
+  const [selectedDate, setSelectedDate] = useState(getToday());
+  const [items, setItems] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  const loadItems = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const resp = await api.listDailyCsv(120);
+      setItems(resp.items || []);
+      if (!selectedDate && resp.today) setSelectedDate(resp.today);
+    } catch (err) {
+      alert(`No se pudo cargar la lista de CSV: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedDate]);
+
+  useEffect(() => { loadItems(); }, [loadItems]);
+
+  const downloadDate = async (date) => {
+    try {
+      const { blob, filename } = await api.downloadDailyCsv(date);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setToast(`CSV ${date} descargado`);
+      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      alert(`No se pudo descargar CSV: ${err.message}`);
+    }
+  };
+
+  const generateSelected = async () => {
+    setIsGenerating(true);
+    try {
+      await api.generateDailyCsv(selectedDate);
+      await loadItems();
+      setToast(`CSV ${selectedDate} generado`);
+      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      alert(`No se pudo generar CSV: ${err.message}`);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const formatSize = (bytes) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  const formatStamp = (iso) => {
+    try {
+      return new Date(iso).toLocaleString('es-MX', { hour12: false });
+    } catch {
+      return iso || '';
+    }
+  };
+
+  return (
+    <div className="fade-in">
+      {toast && (
+        <div className="slide-up" style={{
+          position: 'fixed', top: 90, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--secondary)', color: '#fff', padding: '12px 24px',
+          borderRadius: 12, fontWeight: 700, fontSize: 14, zIndex: 200, boxShadow: 'var(--shadow-lg)',
+        }}>✓ {toast}</div>
+      )}
+
+      <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>🗂️ CSV Diario</h2>
+      <div style={{
+        background: 'var(--card)', borderRadius: 12, padding: '14px 16px', marginBottom: 14,
+        boxShadow: 'var(--shadow)', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'end',
+      }}>
+        <div>
+          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>
+            Fecha
+          </label>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={e => setSelectedDate(e.target.value)}
+            style={{ padding: '8px 10px', border: '2px solid var(--border)', borderRadius: 8, fontSize: 13, outline: 'none' }}
+          />
+        </div>
+        <button onClick={generateSelected} disabled={isGenerating} style={{
+          padding: '9px 12px', borderRadius: 8, border: 'none', cursor: isGenerating ? 'not-allowed' : 'pointer',
+          background: isGenerating ? 'var(--border)' : 'var(--primary)', color: '#fff', fontWeight: 700, fontSize: 12,
+        }}>
+          {isGenerating ? 'Generando...' : 'Generar CSV'}
+        </button>
+        <button onClick={() => downloadDate(selectedDate)} style={{
+          padding: '9px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
+          background: 'var(--secondary)', color: '#fff', fontWeight: 700, fontSize: 12,
+        }}>
+          Descargar fecha
+        </button>
+        <button onClick={loadItems} style={{
+          padding: '9px 12px', borderRadius: 8, border: '2px solid var(--border)', cursor: 'pointer',
+          background: 'var(--card)', color: 'var(--text)', fontWeight: 700, fontSize: 12,
+        }}>
+          Recargar lista
+        </button>
+      </div>
+
+      <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
+        <div style={{
+          display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: 8,
+          padding: '10px 12px', background: 'var(--primary-light)', fontWeight: 800, fontSize: 12, color: 'var(--text-light)',
+        }}>
+          <span>Fecha</span>
+          <span>Actualizado</span>
+          <span>Tamaño</span>
+          <span>Acción</span>
+        </div>
+        {isLoading ? (
+          <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-light)' }}>Cargando CSV diarios...</div>
+        ) : items.length === 0 ? (
+          <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-light)' }}>Aún no hay archivos CSV</div>
+        ) : (
+          items.map(item => (
+            <div key={item.filename} style={{
+              display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: 8, alignItems: 'center',
+              padding: '10px 12px', borderTop: '1px solid var(--border)', fontSize: 13,
+            }}>
+              <span style={{ fontWeight: 700 }}>{item.date}</span>
+              <span style={{ color: 'var(--text-light)' }}>{formatStamp(item.updatedAt)}</span>
+              <span style={{ fontWeight: 700 }}>{formatSize(item.sizeBytes || 0)}</span>
+              <button onClick={() => downloadDate(item.date)} style={{
+                padding: '6px 10px', borderRadius: 7, border: 'none', cursor: 'pointer',
+                background: 'var(--secondary)', color: '#fff', fontWeight: 700, fontSize: 11,
+              }}>
+                Descargar
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // APP ROOT
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1871,6 +2047,7 @@ function App() {
             onEditOrder={startOrderEdit}
           />
         )}
+        {view === 'dailycsv' && <DailyCsvView />}
       </main>
     </div>
   );

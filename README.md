@@ -9,9 +9,11 @@ Se mantuvo el diseño del frontend prototipo y se agregó persistencia real con 
 - Activa integridad de datos (`foreign_keys`, `CHECK` constraints).
 - Usa `WAL` y `synchronous=FULL` para robustez.
 - Hace backup automático por hora en `backups/` (retiene 168 archivos).
+- Hace backup automático diario en `backups/` (retiene 90 días).
 - Permite editar/eliminar alumnos, pedidos y pagos.
 - Incluye buscador de alumnos (alta y selección de alumno).
 - Incluye buscador rápido en Estado de Cuenta y export CSV del periodo.
+- Incluye pestaña **CSV Diario** para generar/listar/descargar CSV por fecha.
 - Si se borra todo en producción, no vuelve a sembrar alumnos dummy al reiniciar.
 
 ## Producción real (Internet público)
@@ -63,6 +65,23 @@ Notas:
 - `start` y `end` son obligatorias en uso normal desde UI (la UI ya las manda).
 - `paymentType` es opcional (`transfer` o `cole`).
 - Devuelve CSV descargable (UTF-8 con BOM para Excel).
+
+## CSV diario (en la app)
+
+- La app guarda snapshots CSV diarios en `daily_csv/`.
+- Se genera automáticamente para la fecha actual al iniciar y después de cada cambio (pedido/pago/alumno).
+- Desde la pestaña **CSV Diario** puedes:
+  - Generar CSV de cualquier fecha.
+  - Ver historial de archivos.
+  - Descargar cada archivo.
+
+Endpoints:
+
+```bash
+GET /api/daily-csv?limit=120
+POST /api/daily-csv/generate   # body opcional: {"date":"YYYY-MM-DD"}
+GET /api/daily-csv/download?date=YYYY-MM-DD
+```
 
 ## Operación (Fase 7)
 

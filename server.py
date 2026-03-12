@@ -18,9 +18,11 @@ from zoneinfo import ZoneInfo
 ROOT_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = ROOT_DIR / "data" / "cafeteria.db"
 DEFAULT_BACKUP_DIR = ROOT_DIR / "backups"
+DEFAULT_DAILY_CSV_DIR = ROOT_DIR / "daily_csv"
 
 DB_PATH = Path(os.getenv("DB_PATH", str(DEFAULT_DB_PATH)))
 BACKUP_DIR = Path(os.getenv("BACKUP_DIR", str(DEFAULT_BACKUP_DIR)))
+DAILY_CSV_DIR = Path(os.getenv("DAILY_CSV_DIR", str(DEFAULT_DAILY_CSV_DIR)))
 DEFAULT_APP_FILE = ROOT_DIR / "Input" / "cafeteria_v2.html"
 
 WRITE_LOCK = threading.Lock()
@@ -28,6 +30,9 @@ ENABLE_HOURLY_BACKUP = True
 AUTH_USER = os.getenv("BASIC_AUTH_USER", "")
 AUTH_PASS = os.getenv("BASIC_AUTH_PASS", "")
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Monterrey")
+HOURLY_BACKUP_RETENTION = 168
+DAILY_BACKUP_RETENTION = 90
+DAILY_CSV_RETENTION = 120
 
 
 PRODUCTS = {
@@ -216,9 +221,9 @@ def maybe_hourly_backup() -> None:
         with sqlite3.connect(backup_path) as target:
             source.backup(target)
 
-    backups = sorted(BACKUP_DIR.glob("cafeteria_*.db"))
-    if len(backups) > 168:
-        for old in backups[:-168]:
+    backups = sorted(BACKUP_DIR.glob("cafeteria_????????_??.db"))
+    if len(backups) > HOURLY_BACKUP_RETENTION:
+        for old in backups[:-HOURLY_BACKUP_RETENTION]:
             old.unlink(missing_ok=True)
 
 
@@ -230,6 +235,94 @@ def force_backup() -> Path:
         with sqlite3.connect(backup_path) as target:
             source.backup(target)
     return backup_path
+
+
+def maybe_daily_backup() -> Optional[Path]:
+    if not DB_PATH.exists():
+        return None
+
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    day_key = app_now().strftime("%Y%m%d")
+    backup_path = BACKUP_DIR / f"cafeteria_daily_{day_key}.db"
+    if backup_path.exists():
+        return backup_path
+
+    with sqlite3.connect(DB_PATH) as source:
+        with sqlite3.connect(backup_path) as target:
+            source.backup(target)
+
+    daily_backups = sorted(BACKUP_DIR.glob("cafeteria_daily_*.db"))
+    if len(daily_backups) > DAILY_BACKUP_RETENTION:
+        for old in daily_backups[:-DAILY_BACKUP_RETENTION]:
+            old.unlink(missing_ok=True)
+    return backup_path
+
+
+def daily_csv_path(date_value: str) -> Path:
+    safe = validate_iso_date(date_value, "Fecha")
+    return DAILY_CSV_DIR / f"estado_cuenta_{safe}_all.csv"
+
+
+def write_daily_csv_snapshot(date_value: str) -> Path:
+    target_date = validate_iso_date(date_value, "Fecha")
+    DAILY_CSV_DIR.mkdir(parents=True, exist_ok=True)
+    with db_connection() as conn:
+        students = fetch_students(conn)
+        orders = fetch_orders(conn)
+        payments = fetch_payments(conn)
+    csv_text = build_statement_csv(
+        students=students,
+        orders=orders,
+        payments=payments,
+        start_date=target_date,
+        end_date=target_date,
+        payment_type=None,
+    )
+    out_path = daily_csv_path(target_date)
+    out_path.write_text(csv_text, encoding="utf-8-sig")
+
+    snapshots = sorted(DAILY_CSV_DIR.glob("estado_cuenta_*_all.csv"))
+    if len(snapshots) > DAILY_CSV_RETENTION:
+        for old in snapshots[:-DAILY_CSV_RETENTION]:
+            old.unlink(missing_ok=True)
+    return out_path
+
+
+def ensure_daily_csv_snapshot(date_value: str) -> Path:
+    out_path = daily_csv_path(date_value)
+    if out_path.exists():
+        return out_path
+    return write_daily_csv_snapshot(date_value)
+
+
+def list_daily_csv_snapshots(limit: int = 60) -> list[dict]:
+    DAILY_CSV_DIR.mkdir(parents=True, exist_ok=True)
+    rows: list[dict] = []
+    for p in sorted(DAILY_CSV_DIR.glob("estado_cuenta_*_all.csv"), reverse=True):
+        m = p.stat()
+        rows.append(
+            {
+                "filename": p.name,
+                "date": p.name.replace("estado_cuenta_", "").replace("_all.csv", ""),
+                "sizeBytes": m.st_size,
+                "updatedAt": dt.datetime.fromtimestamp(m.st_mtime, dt.timezone.utc).isoformat(),
+            }
+        )
+        if len(rows) >= max(1, limit):
+            break
+    return rows
+
+
+def run_post_write_tasks(csv_dates: Optional[set[str]] = None) -> None:
+    maybe_hourly_backup()
+    maybe_daily_backup()
+    targets = csv_dates or {local_date()}
+    for day in targets:
+        try:
+            write_daily_csv_snapshot(day)
+        except Exception:
+            # Never fail the main write due to snapshot generation.
+            continue
 
 
 def row_to_student(row: sqlite3.Row) -> dict:
@@ -510,6 +603,16 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
+    def send_file(self, status_code: int, filepath: Path, download_name: Optional[str] = None) -> None:
+        content = filepath.read_bytes()
+        self.send_response(status_code)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        if download_name:
+            self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
+        self.end_headers()
+        self.wfile.write(content)
+
     def read_json_body(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length) if length > 0 else b""
@@ -576,6 +679,26 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 self.send_json(500, {"error": "Error interno del servidor."})
                 return
 
+        if parsed.path == "/api/daily-csv":
+            try:
+                return self.handle_list_daily_csv(parsed)
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            except Exception:
+                self.send_json(500, {"error": "Error interno del servidor."})
+                return
+
+        if parsed.path == "/api/daily-csv/download":
+            try:
+                return self.handle_download_daily_csv(parsed)
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            except Exception:
+                self.send_json(500, {"error": "Error interno del servidor."})
+                return
+
         return super().do_GET()
 
     def do_POST(self):
@@ -589,6 +712,8 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 return self.handle_create_student()
             if parsed.path == "/api/payments":
                 return self.handle_create_payment()
+            if parsed.path == "/api/daily-csv/generate":
+                return self.handle_generate_daily_csv()
             self.send_json(404, {"error": "Ruta no encontrada."})
         except ValueError as exc:
             self.send_json(400, {"error": str(exc)})
@@ -698,6 +823,56 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
         filename = f"estado_cuenta_{start_date}_{end_date}_{suffix}.csv"
         self.send_csv(200, filename, csv_text)
 
+    def handle_list_daily_csv(self, parsed_url) -> None:
+        query = parse_qs(parsed_url.query or "")
+        limit_raw = query.get("limit", [None])[0]
+        if limit_raw is None or str(limit_raw).strip() == "":
+            limit = 60
+        else:
+            try:
+                limit = int(str(limit_raw))
+            except ValueError:
+                raise ValueError("limit inválido.")
+            if limit <= 0 or limit > 365:
+                raise ValueError("limit fuera de rango (1-365).")
+
+        ensure_daily_csv_snapshot(local_date())
+        snapshots = list_daily_csv_snapshots(limit=limit)
+        self.send_json(
+            200,
+            {
+                "items": snapshots,
+                "count": len(snapshots),
+                "today": local_date(),
+            },
+        )
+
+    def handle_generate_daily_csv(self) -> None:
+        payload = self.read_json_body()
+        target_date_raw = payload.get("date") if isinstance(payload, dict) else None
+        target_date = validate_iso_date(str(target_date_raw), "Fecha") if target_date_raw else local_date()
+        out_path = write_daily_csv_snapshot(target_date)
+        st = out_path.stat()
+        self.send_json(
+            201,
+            {
+                "ok": True,
+                "date": target_date,
+                "filename": out_path.name,
+                "sizeBytes": st.st_size,
+                "updatedAt": dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc).isoformat(),
+            },
+        )
+
+    def handle_download_daily_csv(self, parsed_url) -> None:
+        query = parse_qs(parsed_url.query or "")
+        date_raw = query.get("date", [None])[0]
+        if not date_raw or not str(date_raw).strip():
+            raise ValueError("date es obligatorio.")
+        target_date = validate_iso_date(str(date_raw), "Fecha")
+        out_path = ensure_daily_csv_snapshot(target_date)
+        self.send_file(200, out_path, download_name=out_path.name)
+
     def handle_create_order(self):
         payload = self.read_json_body()
         student_id = payload.get("studentId")
@@ -734,7 +909,7 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                     [(order_id, i["productId"], i["qty"], i["unitPrice"]) for i in normalized_items],
                 )
                 conn.commit()
-            maybe_hourly_backup()
+            run_post_write_tasks({order_date})
 
         self.send_json(
             201,
@@ -822,7 +997,8 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                     (student_id, order_date, order_time, total, order_id),
                 )
                 conn.commit()
-            maybe_hourly_backup()
+                old_order_date = current_order["order_date"]
+            run_post_write_tasks({old_order_date, order_date})
 
         self.send_json(
             200,
@@ -842,12 +1018,14 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
 
         with WRITE_LOCK:
             with db_connection() as conn:
-                cur = conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
-                conn.commit()
-                if cur.rowcount == 0:
+                existing = conn.execute("SELECT order_date FROM orders WHERE id = ?", (order_id,)).fetchone()
+                if not existing:
                     self.send_json(404, {"error": "Pedido no encontrado."})
                     return
-            maybe_hourly_backup()
+                deleted_date = existing["order_date"]
+                conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+                conn.commit()
+            run_post_write_tasks({deleted_date})
 
         self.send_json(200, {"ok": True})
 
@@ -884,7 +1062,7 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 )
                 student_id = cur.lastrowid
                 conn.commit()
-            maybe_hourly_backup()
+            run_post_write_tasks()
 
         self.send_json(
             201,
@@ -1007,7 +1185,7 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                             )
 
                 conn.commit()
-            maybe_hourly_backup()
+            run_post_write_tasks()
 
         self.send_json(
             200,
@@ -1124,7 +1302,7 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
 
                 conn.execute("DELETE FROM students WHERE id = ?", (student_id,))
                 conn.commit()
-            maybe_hourly_backup()
+            run_post_write_tasks()
 
         self.send_json(200, {"ok": True})
 
@@ -1162,7 +1340,7 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 )
                 payment_id = cur.lastrowid
                 conn.commit()
-            maybe_hourly_backup()
+            run_post_write_tasks({payment_date})
 
         self.send_json(
             201,
@@ -1243,7 +1421,8 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                     (family_key, amount, payment_date, method, note, payment_id),
                 )
                 conn.commit()
-            maybe_hourly_backup()
+                old_payment_date = current["payment_date"]
+            run_post_write_tasks({old_payment_date, payment_date})
 
         self.send_json(
             200,
@@ -1263,12 +1442,14 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
 
         with WRITE_LOCK:
             with db_connection() as conn:
-                cur = conn.execute("DELETE FROM payments WHERE id = ?", (payment_id,))
-                conn.commit()
-                if cur.rowcount == 0:
+                existing = conn.execute("SELECT payment_date FROM payments WHERE id = ?", (payment_id,)).fetchone()
+                if not existing:
                     self.send_json(404, {"error": "Pago no encontrado."})
                     return
-            maybe_hourly_backup()
+                deleted_date = existing["payment_date"]
+                conn.execute("DELETE FROM payments WHERE id = ?", (payment_id,))
+                conn.commit()
+            run_post_write_tasks({deleted_date})
 
         self.send_json(200, {"ok": True})
 
@@ -1279,6 +1460,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "8080")), help="Puerto para levantar el servidor")
     parser.add_argument("--db-path", default=str(DB_PATH), help="Ruta del archivo SQLite")
     parser.add_argument("--backup-dir", default=str(BACKUP_DIR), help="Carpeta para backups")
+    parser.add_argument("--daily-csv-dir", default="", help="Carpeta para snapshots CSV diarios")
     parser.add_argument("--basic-user", default=AUTH_USER, help="Usuario para Basic Auth (opcional)")
     parser.add_argument("--basic-pass", default=AUTH_PASS, help="Password para Basic Auth (opcional)")
     parser.add_argument("--no-hourly-backup", action="store_true", help="Desactiva el backup automático por hora")
@@ -1287,7 +1469,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    global ENABLE_HOURLY_BACKUP, DB_PATH, BACKUP_DIR, AUTH_USER, AUTH_PASS
+    global ENABLE_HOURLY_BACKUP, DB_PATH, BACKUP_DIR, DAILY_CSV_DIR, AUTH_USER, AUTH_PASS
     args = parse_args()
     ENABLE_HOURLY_BACKUP = not args.no_hourly_backup
     DB_PATH = Path(args.db_path)
@@ -1298,8 +1480,16 @@ def main() -> None:
         DB_PATH = ROOT_DIR / DB_PATH
     if not BACKUP_DIR.is_absolute():
         BACKUP_DIR = ROOT_DIR / BACKUP_DIR
+    if args.daily_csv_dir.strip():
+        DAILY_CSV_DIR = Path(args.daily_csv_dir.strip())
+        if not DAILY_CSV_DIR.is_absolute():
+            DAILY_CSV_DIR = ROOT_DIR / DAILY_CSV_DIR
+    else:
+        DAILY_CSV_DIR = DB_PATH.parent / "daily_csv"
 
     init_db()
+    maybe_daily_backup()
+    ensure_daily_csv_snapshot(local_date())
 
     if args.backup_now:
         backup_path = force_backup()
