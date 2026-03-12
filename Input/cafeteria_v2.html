@@ -214,11 +214,12 @@ const api = {
     body: JSON.stringify(payload),
   }),
   deletePayment: (paymentId) => apiRequest(`/api/payments/${paymentId}`, { method: 'DELETE' }),
-  exportStatementCsv: async ({ start, end, paymentType }) => {
+  exportStatementCsv: async ({ start, end, paymentType, kind = 'summary' }) => {
     const params = new URLSearchParams();
     if (start) params.set('start', start);
     if (end) params.set('end', end);
     if (paymentType) params.set('paymentType', paymentType);
+    if (kind) params.set('kind', kind);
     const url = `/api/export.csv?${params.toString()}`;
     const res = await fetch(url);
     if (!res.ok) {
@@ -231,14 +232,15 @@ const api = {
     }
     return await res.blob();
   },
-  listDailyCsv: (limit = 60) => apiRequest(`/api/daily-csv?limit=${encodeURIComponent(String(limit))}`),
-  generateDailyCsv: (date) => apiRequest('/api/daily-csv/generate', {
+  listDailyCsv: (limit = 60, kind = 'summary') => apiRequest(`/api/daily-csv?limit=${encodeURIComponent(String(limit))}&kind=${encodeURIComponent(kind)}`),
+  generateDailyCsv: (date, kind = 'summary') => apiRequest('/api/daily-csv/generate', {
     method: 'POST',
-    body: JSON.stringify(date ? { date } : {}),
+    body: JSON.stringify({ ...(date ? { date } : {}), kind }),
   }),
-  downloadDailyCsv: async (date) => {
+  downloadDailyCsv: async (date, kind = 'summary') => {
     const params = new URLSearchParams();
     params.set('date', date);
+    params.set('kind', kind);
     const res = await fetch(`/api/daily-csv/download?${params.toString()}`);
     if (!res.ok) {
       let msg = `Error ${res.status}`;
@@ -1012,6 +1014,7 @@ function StatementView({ orders, setOrders, students, payments, setPayments, onE
   const [expanded, setExpanded] = useState({});
   const [selectedForShare, setSelectedForShare] = useState({});
   const [viewMode, setViewMode] = useState('complete'); // complete | compact
+  const [csvKind, setCsvKind] = useState('summary'); // summary | movements | balances
   const [payingFor, setPayingFor] = useState(null); // familyKey being paid
   const [editingPayment, setEditingPayment] = useState(null); // payment object being edited
   const [toast, setToast] = useState(null);
@@ -1096,6 +1099,9 @@ function StatementView({ orders, setOrders, students, payments, setPayments, onE
     const members = familyGroups[fk];
     return sum + periodOrders.filter(o => members.some(m => m.id === o.studentId)).reduce((s, o) => s + o.total, 0);
   }, 0);
+  const visiblePeriodPaymentsTotal = visibleFamilyKeys.reduce((sum, fk) => {
+    return sum + computePeriodPayments(fk, payments, period.start, period.end).reduce((s, p) => s + p.amount, 0);
+  }, 0);
 
   // WhatsApp sharing
   const anySelected = Object.values(selectedForShare).some(v => v);
@@ -1169,16 +1175,23 @@ function StatementView({ orders, setOrders, students, payments, setPayments, onE
         start: period.start,
         end: period.end,
         paymentType: filterType,
+        kind: csvKind,
       });
+      const filePrefix = csvKind === 'movements'
+        ? 'movimientos_cuenta'
+        : csvKind === 'balances'
+          ? 'saldos_cuenta'
+          : 'estado_cuenta';
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `estado_cuenta_${period.start}_${period.end}_${filterType}.csv`;
+      a.download = `${filePrefix}_${period.start}_${period.end}_${filterType}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      setToast('CSV descargado');
+      const kindLabel = csvKind === 'movements' ? 'movimientos' : csvKind === 'balances' ? 'saldos' : 'resumen';
+      setToast(`CSV ${kindLabel} descargado`);
       setTimeout(() => setToast(null), 3000);
     } catch (err) {
       alert(`No se pudo exportar CSV: ${err.message}`);
@@ -1258,6 +1271,15 @@ function StatementView({ orders, setOrders, students, payments, setPayments, onE
             onFocus={e => e.target.style.borderColor = 'var(--primary)'}
             onBlur={e => e.target.style.borderColor = 'var(--border)'}
           />
+          <SegmentedControl
+            options={[
+              { value: 'summary', label: 'Resumen' },
+              { value: 'movements', label: 'Movimientos' },
+              { value: 'balances', label: 'Saldos' },
+            ]}
+            value={csvKind}
+            onChange={setCsvKind}
+          />
           <button onClick={handleExportCsv} style={{
             padding: '8px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
             background: 'var(--primary)', color: '#fff', fontWeight: 700, fontSize: 12,
@@ -1270,10 +1292,15 @@ function StatementView({ orders, setOrders, students, payments, setPayments, onE
         background: 'var(--accent-light)', borderRadius: 12, padding: '14px 20px', marginBottom: 14,
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
-        <span style={{ fontWeight: 700, fontSize: 14 }}>
-          Consumo del periodo ({filterType === 'transfer' ? 'Transfer' : 'Cole'})
-          {accountSearch.trim() && ` · filtro activo`}
-        </span>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>
+            Salidas consumo ({filterType === 'transfer' ? 'Transfer' : 'Cole'})
+            {accountSearch.trim() && ` · filtro activo`}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 2 }}>
+            Entradas: {fmt(visiblePeriodPaymentsTotal)} · Salidas: {fmt(accountSearch.trim() ? visiblePeriodTotal : periodTotal)} · Neto: {fmtSigned(visiblePeriodPaymentsTotal - (accountSearch.trim() ? visiblePeriodTotal : periodTotal))}
+          </div>
+        </div>
         <span style={{ fontFamily: "'Fredoka One', cursive", fontSize: 22, color: 'var(--primary)' }}>
           {fmt(accountSearch.trim() ? visiblePeriodTotal : periodTotal)}
         </span>
@@ -1810,15 +1837,18 @@ function RegisterView({ students, setStudents }) {
 // ─── Daily CSV View ───
 function DailyCsvView() {
   const [selectedDate, setSelectedDate] = useState(getToday());
+  const [csvKind, setCsvKind] = useState('summary');
   const [items, setItems] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [toast, setToast] = useState(null);
 
+  const kindLabel = csvKind === 'movements' ? 'Movimientos' : csvKind === 'balances' ? 'Saldos' : 'Resumen';
+
   const loadItems = useCallback(async () => {
     setIsLoading(true);
     try {
-      const resp = await api.listDailyCsv(120);
+      const resp = await api.listDailyCsv(120, csvKind);
       setItems(resp.items || []);
       if (!selectedDate && resp.today) setSelectedDate(resp.today);
     } catch (err) {
@@ -1826,13 +1856,13 @@ function DailyCsvView() {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedDate]);
+  }, [selectedDate, csvKind]);
 
   useEffect(() => { loadItems(); }, [loadItems]);
 
   const downloadDate = async (date) => {
     try {
-      const { blob, filename } = await api.downloadDailyCsv(date);
+      const { blob, filename } = await api.downloadDailyCsv(date, csvKind);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -1841,7 +1871,7 @@ function DailyCsvView() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      setToast(`CSV ${date} descargado`);
+      setToast(`CSV ${kindLabel} ${date} descargado`);
       setTimeout(() => setToast(null), 3000);
     } catch (err) {
       alert(`No se pudo descargar CSV: ${err.message}`);
@@ -1851,9 +1881,9 @@ function DailyCsvView() {
   const generateSelected = async () => {
     setIsGenerating(true);
     try {
-      await api.generateDailyCsv(selectedDate);
+      await api.generateDailyCsv(selectedDate, csvKind);
       await loadItems();
-      setToast(`CSV ${selectedDate} generado`);
+      setToast(`CSV ${kindLabel} ${selectedDate} generado`);
       setTimeout(() => setToast(null), 3000);
     } catch (err) {
       alert(`No se pudo generar CSV: ${err.message}`);
@@ -1887,6 +1917,17 @@ function DailyCsvView() {
       )}
 
       <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>🗂️ CSV Diario</h2>
+      <div style={{ marginBottom: 10 }}>
+        <SegmentedControl
+          options={[
+            { value: 'summary', label: 'Resumen' },
+            { value: 'movements', label: 'Movimientos' },
+            { value: 'balances', label: 'Saldos' },
+          ]}
+          value={csvKind}
+          onChange={setCsvKind}
+        />
+      </div>
       <div style={{
         background: 'var(--card)', borderRadius: 12, padding: '14px 16px', marginBottom: 14,
         boxShadow: 'var(--shadow)', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'end',
@@ -1906,13 +1947,13 @@ function DailyCsvView() {
           padding: '9px 12px', borderRadius: 8, border: 'none', cursor: isGenerating ? 'not-allowed' : 'pointer',
           background: isGenerating ? 'var(--border)' : 'var(--primary)', color: '#fff', fontWeight: 700, fontSize: 12,
         }}>
-          {isGenerating ? 'Generando...' : 'Generar CSV'}
+          {isGenerating ? 'Generando...' : `Generar ${kindLabel}`}
         </button>
         <button onClick={() => downloadDate(selectedDate)} style={{
           padding: '9px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
           background: 'var(--secondary)', color: '#fff', fontWeight: 700, fontSize: 12,
         }}>
-          Descargar fecha
+          Descargar {kindLabel}
         </button>
         <button onClick={loadItems} style={{
           padding: '9px 12px', borderRadius: 8, border: '2px solid var(--border)', cursor: 'pointer',
@@ -1927,7 +1968,7 @@ function DailyCsvView() {
           display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: 8,
           padding: '10px 12px', background: 'var(--primary-light)', fontWeight: 800, fontSize: 12, color: 'var(--text-light)',
         }}>
-          <span>Fecha</span>
+          <span>Fecha ({kindLabel})</span>
           <span>Actualizado</span>
           <span>Tamaño</span>
           <span>Acción</span>

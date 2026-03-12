@@ -33,6 +33,20 @@ APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Monterrey")
 HOURLY_BACKUP_RETENTION = 168
 DAILY_BACKUP_RETENTION = 90
 DAILY_CSV_RETENTION = 120
+CSV_KIND_SUMMARY = "summary"
+CSV_KIND_MOVEMENTS = "movements"
+CSV_KIND_BALANCES = "balances"
+CSV_KINDS = {CSV_KIND_SUMMARY, CSV_KIND_MOVEMENTS, CSV_KIND_BALANCES}
+CSV_KIND_DAILY_PREFIX = {
+    CSV_KIND_SUMMARY: "estado_resumen",
+    CSV_KIND_MOVEMENTS: "estado_movimientos",
+    CSV_KIND_BALANCES: "estado_saldos",
+}
+CSV_KIND_EXPORT_PREFIX = {
+    CSV_KIND_SUMMARY: "estado_cuenta",
+    CSV_KIND_MOVEMENTS: "movimientos_cuenta",
+    CSV_KIND_BALANCES: "saldos_cuenta",
+}
 
 
 PRODUCTS = {
@@ -258,19 +272,23 @@ def maybe_daily_backup() -> Optional[Path]:
     return backup_path
 
 
-def daily_csv_path(date_value: str) -> Path:
+def daily_csv_path(date_value: str, kind: str = CSV_KIND_SUMMARY) -> Path:
     safe = validate_iso_date(date_value, "Fecha")
-    return DAILY_CSV_DIR / f"estado_cuenta_{safe}_all.csv"
+    safe_kind = normalize_csv_kind(kind)
+    prefix = CSV_KIND_DAILY_PREFIX[safe_kind]
+    return DAILY_CSV_DIR / f"{prefix}_{safe}.csv"
 
 
-def write_daily_csv_snapshot(date_value: str) -> Path:
+def write_daily_csv_snapshot(date_value: str, kind: str = CSV_KIND_SUMMARY) -> Path:
     target_date = validate_iso_date(date_value, "Fecha")
+    csv_kind = normalize_csv_kind(kind)
     DAILY_CSV_DIR.mkdir(parents=True, exist_ok=True)
     with db_connection() as conn:
         students = fetch_students(conn)
         orders = fetch_orders(conn)
         payments = fetch_payments(conn)
-    csv_text = build_statement_csv(
+    csv_text = build_export_csv(
+        kind=csv_kind,
         students=students,
         orders=orders,
         payments=payments,
@@ -278,32 +296,36 @@ def write_daily_csv_snapshot(date_value: str) -> Path:
         end_date=target_date,
         payment_type=None,
     )
-    out_path = daily_csv_path(target_date)
+    out_path = daily_csv_path(target_date, csv_kind)
     out_path.write_text(csv_text, encoding="utf-8-sig")
 
-    snapshots = sorted(DAILY_CSV_DIR.glob("estado_cuenta_*_all.csv"))
+    snapshots = sorted(DAILY_CSV_DIR.glob("*.csv"))
     if len(snapshots) > DAILY_CSV_RETENTION:
         for old in snapshots[:-DAILY_CSV_RETENTION]:
             old.unlink(missing_ok=True)
     return out_path
 
 
-def ensure_daily_csv_snapshot(date_value: str) -> Path:
-    out_path = daily_csv_path(date_value)
+def ensure_daily_csv_snapshot(date_value: str, kind: str = CSV_KIND_SUMMARY) -> Path:
+    out_path = daily_csv_path(date_value, kind)
     if out_path.exists():
         return out_path
-    return write_daily_csv_snapshot(date_value)
+    return write_daily_csv_snapshot(date_value, kind)
 
 
-def list_daily_csv_snapshots(limit: int = 60) -> list[dict]:
+def list_daily_csv_snapshots(limit: int = 60, kind: str = CSV_KIND_SUMMARY) -> list[dict]:
+    csv_kind = normalize_csv_kind(kind)
+    prefix = CSV_KIND_DAILY_PREFIX[csv_kind]
     DAILY_CSV_DIR.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
-    for p in sorted(DAILY_CSV_DIR.glob("estado_cuenta_*_all.csv"), reverse=True):
+    for p in sorted(DAILY_CSV_DIR.glob(f"{prefix}_*.csv"), reverse=True):
         m = p.stat()
+        date_value = p.name.replace(f"{prefix}_", "").replace(".csv", "")
         rows.append(
             {
                 "filename": p.name,
-                "date": p.name.replace("estado_cuenta_", "").replace("_all.csv", ""),
+                "date": date_value,
+                "kind": csv_kind,
                 "sizeBytes": m.st_size,
                 "updatedAt": dt.datetime.fromtimestamp(m.st_mtime, dt.timezone.utc).isoformat(),
             }
@@ -318,11 +340,12 @@ def run_post_write_tasks(csv_dates: Optional[set[str]] = None) -> None:
     maybe_daily_backup()
     targets = csv_dates or {local_date()}
     for day in targets:
-        try:
-            write_daily_csv_snapshot(day)
-        except Exception:
-            # Never fail the main write due to snapshot generation.
-            continue
+        for kind in CSV_KINDS:
+            try:
+                write_daily_csv_snapshot(day, kind=kind)
+            except Exception:
+                # Never fail the main write due to snapshot generation.
+                continue
 
 
 def backup_file_inventory(path: Path) -> dict:
@@ -376,7 +399,8 @@ def restore_backup(filename: str) -> dict:
             with sqlite3.connect(DB_PATH) as target:
                 source.backup(target)
         maybe_daily_backup()
-        ensure_daily_csv_snapshot(local_date())
+        for csv_kind in CSV_KINDS:
+            ensure_daily_csv_snapshot(local_date(), kind=csv_kind)
         with db_connection() as conn:
             students = conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
             orders = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
@@ -511,6 +535,17 @@ def validate_time_hhmm(value: str, field_name: str) -> str:
     return value
 
 
+def normalize_payment_type(value: Optional[str], field_name: str = "paymentType") -> Optional[str]:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw not in {"transfer", "cole"}:
+        raise ValueError(f"{field_name} inválido. Usa transfer o cole.")
+    return raw
+
+
 def normalize_cart(cart: list) -> tuple[list, float]:
     if not isinstance(cart, list) or len(cart) == 0:
         raise ValueError("El carrito está vacío.")
@@ -544,6 +579,28 @@ def week_range_from_date(date_value: dt.date) -> tuple[str, str]:
     return monday.isoformat(), sunday.isoformat()
 
 
+def normalize_csv_kind(value: Optional[str], field_name: str = "kind") -> str:
+    raw = CSV_KIND_SUMMARY if value is None else str(value).strip().lower()
+    if raw not in CSV_KINDS:
+        valid = ", ".join(sorted(CSV_KINDS))
+        raise ValueError(f"{field_name} inválido. Usa: {valid}.")
+    return raw
+
+
+def filter_students_by_payment_type(students: list, payment_type: Optional[str]) -> list:
+    if payment_type is None:
+        return list(students)
+    return [s for s in students if s["paymentType"] == payment_type]
+
+
+def group_students_by_family(students_filtered: list) -> dict[str, list]:
+    family_groups: dict[str, list] = {}
+    for s in students_filtered:
+        key = student_family_key(s["id"], s.get("familyId"))
+        family_groups.setdefault(key, []).append(s)
+    return family_groups
+
+
 def build_statement_csv(
     students: list,
     orders: list,
@@ -552,12 +609,8 @@ def build_statement_csv(
     end_date: str,
     payment_type: Optional[str] = None,
 ) -> str:
-    students_filtered = [s for s in students if payment_type is None or s["paymentType"] == payment_type]
-
-    family_groups: dict[str, list] = {}
-    for s in students_filtered:
-        key = student_family_key(s["id"], s.get("familyId"))
-        family_groups.setdefault(key, []).append(s)
+    students_filtered = filter_students_by_payment_type(students, payment_type)
+    family_groups = group_students_by_family(students_filtered)
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -645,6 +698,273 @@ def build_statement_csv(
             )
 
     return output.getvalue()
+
+
+def build_movements_csv(
+    students: list,
+    orders: list,
+    payments: list,
+    start_date: str,
+    end_date: str,
+    payment_type: Optional[str] = None,
+) -> str:
+    students_filtered = filter_students_by_payment_type(students, payment_type)
+    student_map = {s["id"]: s for s in students}
+    filtered_student_map = {s["id"]: s for s in students_filtered}
+    family_groups = group_students_by_family(students_filtered)
+    allowed_student_ids = set(filtered_student_map.keys())
+    allowed_family_keys = set(family_groups.keys())
+
+    rows: list[dict] = []
+
+    for order in orders:
+        student_id = order["studentId"]
+        if student_id not in allowed_student_ids:
+            continue
+        if not (start_date <= order["date"] <= end_date):
+            continue
+        student = filtered_student_map.get(student_id) or student_map.get(student_id)
+        if not student:
+            continue
+        family_key = student_family_key(student["id"], student.get("familyId"))
+        family_id = student.get("familyId") or ""
+        order_time = order.get("time") or ""
+        for item in order.get("items", []):
+            qty = int(item.get("qty", 0) or 0)
+            unit_price = float(item.get("unitPrice", 0) or 0)
+            amount = round(qty * unit_price, 2)
+            product_id = int(item.get("productId", 0) or 0)
+            product_name = PRODUCTS.get(product_id, {}).get("name", f"Producto {product_id}")
+            rows.append(
+                {
+                    "date": order["date"],
+                    "time": order_time,
+                    "direction": "salida",
+                    "movementType": "consumo",
+                    "familyKey": family_key,
+                    "familyId": family_id,
+                    "studentId": student["id"],
+                    "studentName": student["name"],
+                    "grade": student["grade"],
+                    "paymentType": student.get("paymentType") or "",
+                    "orderId": order["id"],
+                    "paymentId": "",
+                    "productId": product_id,
+                    "productName": product_name,
+                    "qty": qty,
+                    "unitPrice": f"{unit_price:.2f}",
+                    "amount": f"{-amount:.2f}",
+                    "method": "",
+                    "note": "",
+                }
+            )
+
+    for payment in payments:
+        family_key = payment["familyKey"]
+        if family_key not in allowed_family_keys:
+            continue
+        if not (start_date <= payment["date"] <= end_date):
+            continue
+        members = family_groups.get(family_key, [])
+        member_names = " / ".join(sorted(m["name"] for m in members))
+        member_types = sorted({m.get("paymentType") for m in members if m.get("paymentType")})
+        payment_type_value = member_types[0] if len(member_types) == 1 else ("mixed" if member_types else "")
+        family_id = members[0].get("familyId") if members else None
+        family_id = family_id or (family_key if not family_key.startswith("ind-") else "")
+        student_id_value = ""
+        student_name_value = member_names
+        grade_value = ""
+
+        if family_key.startswith("ind-"):
+            try:
+                student_id_from_key = int(family_key.split("-", 1)[1])
+                ind_student = filtered_student_map.get(student_id_from_key) or student_map.get(student_id_from_key)
+            except Exception:
+                ind_student = None
+            if ind_student:
+                student_id_value = ind_student["id"]
+                student_name_value = ind_student["name"]
+                grade_value = ind_student["grade"]
+                payment_type_value = ind_student.get("paymentType") or payment_type_value
+
+        amount = round(float(payment.get("amount", 0) or 0), 2)
+        rows.append(
+            {
+                "date": payment["date"],
+                "time": "",
+                "direction": "entrada",
+                "movementType": "pago",
+                "familyKey": family_key,
+                "familyId": family_id,
+                "studentId": student_id_value,
+                "studentName": student_name_value,
+                "grade": grade_value,
+                "paymentType": payment_type_value,
+                "orderId": "",
+                "paymentId": payment["id"],
+                "productId": "",
+                "productName": "",
+                "qty": "",
+                "unitPrice": "",
+                "amount": f"{amount:.2f}",
+                "method": payment.get("method") or "",
+                "note": payment.get("note") or "",
+            }
+        )
+
+    rows.sort(
+        key=lambda r: (
+            r["date"],
+            r["time"] or "99:99",
+            0 if r["movementType"] == "consumo" else 1,
+            str(r["orderId"] or r["paymentId"] or ""),
+        )
+    )
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "fecha",
+            "hora",
+            "direccion",
+            "tipo_movimiento",
+            "family_key",
+            "family_id",
+            "student_id",
+            "student_name",
+            "grade",
+            "payment_type",
+            "order_id",
+            "payment_id",
+            "product_id",
+            "product_name",
+            "qty",
+            "unit_price",
+            "monto",
+            "method",
+            "note",
+        ]
+    )
+    for r in rows:
+        writer.writerow(
+            [
+                r["date"],
+                r["time"],
+                r["direction"],
+                r["movementType"],
+                r["familyKey"],
+                r["familyId"],
+                r["studentId"],
+                r["studentName"],
+                r["grade"],
+                r["paymentType"],
+                r["orderId"],
+                r["paymentId"],
+                r["productId"],
+                r["productName"],
+                r["qty"],
+                r["unitPrice"],
+                r["amount"],
+                r["method"],
+                r["note"],
+            ]
+        )
+    return output.getvalue()
+
+
+def build_balances_csv(
+    students: list,
+    orders: list,
+    payments: list,
+    start_date: str,
+    end_date: str,
+    payment_type: Optional[str] = None,
+) -> str:
+    students_filtered = filter_students_by_payment_type(students, payment_type)
+    family_groups = group_students_by_family(students_filtered)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "family_key",
+            "family_id",
+            "students",
+            "payment_type",
+            "initial_balance",
+            "entries_total",
+            "exits_total",
+            "balance_total",
+            "period_start",
+            "period_end",
+            "entries_period",
+            "exits_period",
+            "net_period",
+        ]
+    )
+
+    for family_key in sorted(family_groups.keys()):
+        members = family_groups[family_key]
+        member_ids = {m["id"] for m in members}
+        family_id = members[0].get("familyId") or ""
+        members_text = " / ".join(sorted(m["name"] for m in members))
+        member_types = sorted({m["paymentType"] for m in members})
+        payment_type_value = member_types[0] if len(member_types) == 1 else "mixed"
+
+        initial_sum = round(sum(float(m.get("initialBalance", 0) or 0) for m in members), 2)
+        entries_total = round(sum(p["amount"] for p in payments if p["familyKey"] == family_key), 2)
+        exits_total = round(sum(o["total"] for o in orders if o["studentId"] in member_ids), 2)
+        balance_total = round(initial_sum + entries_total - exits_total, 2)
+
+        entries_period = round(
+            sum(p["amount"] for p in payments if p["familyKey"] == family_key and start_date <= p["date"] <= end_date),
+            2,
+        )
+        exits_period = round(
+            sum(o["total"] for o in orders if o["studentId"] in member_ids and start_date <= o["date"] <= end_date),
+            2,
+        )
+        net_period = round(entries_period - exits_period, 2)
+
+        writer.writerow(
+            [
+                family_key,
+                family_id,
+                members_text,
+                payment_type_value,
+                f"{initial_sum:.2f}",
+                f"{entries_total:.2f}",
+                f"{exits_total:.2f}",
+                f"{balance_total:.2f}",
+                start_date,
+                end_date,
+                f"{entries_period:.2f}",
+                f"{exits_period:.2f}",
+                f"{net_period:.2f}",
+            ]
+        )
+
+    return output.getvalue()
+
+
+def build_export_csv(
+    kind: str,
+    students: list,
+    orders: list,
+    payments: list,
+    start_date: str,
+    end_date: str,
+    payment_type: Optional[str] = None,
+) -> str:
+    if kind == CSV_KIND_SUMMARY:
+        return build_statement_csv(students, orders, payments, start_date, end_date, payment_type)
+    if kind == CSV_KIND_MOVEMENTS:
+        return build_movements_csv(students, orders, payments, start_date, end_date, payment_type)
+    if kind == CSV_KIND_BALANCES:
+        return build_balances_csv(students, orders, payments, start_date, end_date, payment_type)
+    valid = ", ".join(sorted(CSV_KINDS))
+    raise ValueError(f"kind inválido. Usa: {valid}.")
 
 
 class CafeteriaHandler(SimpleHTTPRequestHandler):
@@ -866,6 +1186,7 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
         start_raw = query.get("start", [None])[0]
         end_raw = query.get("end", [None])[0]
         payment_type_raw = query.get("paymentType", [None])[0]
+        kind_raw = query.get("kind", [None])[0]
 
         if start_raw:
             start_date = validate_iso_date(str(start_raw), "Fecha inicio")
@@ -878,18 +1199,16 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
         if start_date > end_date:
             raise ValueError("La fecha inicio no puede ser mayor que la fecha fin.")
 
-        payment_type = None
-        if payment_type_raw is not None and str(payment_type_raw).strip():
-            payment_type = str(payment_type_raw).strip()
-            if payment_type not in {"transfer", "cole"}:
-                raise ValueError("paymentType inválido. Usa transfer o cole.")
+        payment_type = normalize_payment_type(payment_type_raw)
+        kind = normalize_csv_kind(kind_raw, field_name="kind")
 
         with db_connection() as conn:
             students = fetch_students(conn)
             orders = fetch_orders(conn)
             payments = fetch_payments(conn)
 
-        csv_text = build_statement_csv(
+        csv_text = build_export_csv(
+            kind=kind,
             students=students,
             orders=orders,
             payments=payments,
@@ -898,12 +1217,14 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
             payment_type=payment_type,
         )
         suffix = payment_type or "all"
-        filename = f"estado_cuenta_{start_date}_{end_date}_{suffix}.csv"
+        prefix = CSV_KIND_EXPORT_PREFIX[kind]
+        filename = f"{prefix}_{start_date}_{end_date}_{suffix}.csv"
         self.send_csv(200, filename, csv_text)
 
     def handle_list_daily_csv(self, parsed_url) -> None:
         query = parse_qs(parsed_url.query or "")
         limit_raw = query.get("limit", [None])[0]
+        kind_raw = query.get("kind", [None])[0]
         if limit_raw is None or str(limit_raw).strip() == "":
             limit = 60
         else:
@@ -914,11 +1235,13 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
             if limit <= 0 or limit > 365:
                 raise ValueError("limit fuera de rango (1-365).")
 
-        ensure_daily_csv_snapshot(local_date())
-        snapshots = list_daily_csv_snapshots(limit=limit)
+        kind = normalize_csv_kind(kind_raw, field_name="kind")
+        ensure_daily_csv_snapshot(local_date(), kind=kind)
+        snapshots = list_daily_csv_snapshots(limit=limit, kind=kind)
         self.send_json(
             200,
             {
+                "kind": kind,
                 "items": snapshots,
                 "count": len(snapshots),
                 "today": local_date(),
@@ -928,13 +1251,16 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
     def handle_generate_daily_csv(self) -> None:
         payload = self.read_json_body()
         target_date_raw = payload.get("date") if isinstance(payload, dict) else None
+        kind_raw = payload.get("kind") if isinstance(payload, dict) else None
         target_date = validate_iso_date(str(target_date_raw), "Fecha") if target_date_raw else local_date()
-        out_path = write_daily_csv_snapshot(target_date)
+        kind = normalize_csv_kind(kind_raw, field_name="kind")
+        out_path = write_daily_csv_snapshot(target_date, kind=kind)
         st = out_path.stat()
         self.send_json(
             201,
             {
                 "ok": True,
+                "kind": kind,
                 "date": target_date,
                 "filename": out_path.name,
                 "sizeBytes": st.st_size,
@@ -945,10 +1271,12 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
     def handle_download_daily_csv(self, parsed_url) -> None:
         query = parse_qs(parsed_url.query or "")
         date_raw = query.get("date", [None])[0]
+        kind_raw = query.get("kind", [None])[0]
         if not date_raw or not str(date_raw).strip():
             raise ValueError("date es obligatorio.")
         target_date = validate_iso_date(str(date_raw), "Fecha")
-        out_path = ensure_daily_csv_snapshot(target_date)
+        kind = normalize_csv_kind(kind_raw, field_name="kind")
+        out_path = ensure_daily_csv_snapshot(target_date, kind=kind)
         self.send_file(200, out_path, download_name=out_path.name)
 
     def handle_list_backups(self, parsed_url) -> None:
@@ -1599,7 +1927,8 @@ def main() -> None:
 
     init_db()
     maybe_daily_backup()
-    ensure_daily_csv_snapshot(local_date())
+    for csv_kind in CSV_KINDS:
+        ensure_daily_csv_snapshot(local_date(), kind=csv_kind)
 
     if args.backup_now:
         backup_path = force_backup()

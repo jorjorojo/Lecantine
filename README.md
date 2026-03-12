@@ -57,30 +57,35 @@ Prueba automatizada ejecutada (`RESULT: PASS`) con:
 Endpoint:
 
 ```bash
-GET /api/export.csv?start=YYYY-MM-DD&end=YYYY-MM-DD&paymentType=transfer|cole
+GET /api/export.csv?start=YYYY-MM-DD&end=YYYY-MM-DD&paymentType=transfer|cole&kind=summary|movements|balances
 ```
 
 Notas:
 
 - `start` y `end` son obligatorias en uso normal desde UI (la UI ya las manda).
 - `paymentType` es opcional (`transfer` o `cole`).
+- `kind` define el CSV:
+  - `summary`: resumen por familia/alumno.
+  - `movements`: entradas/salidas por transacción (qué pidió cada alumno y pagos).
+  - `balances`: saldos por cuenta (inicial, entradas, salidas, saldo).
 - Devuelve CSV descargable (UTF-8 con BOM para Excel).
 
 ## CSV diario (en la app)
 
 - La app guarda snapshots CSV diarios en `daily_csv/`.
-- Se genera automáticamente para la fecha actual al iniciar y después de cada cambio (pedido/pago/alumno).
+- Se generan automáticamente 3 archivos diarios (`summary`, `movements`, `balances`) al iniciar y después de cada cambio (pedido/pago/alumno).
 - Desde la pestaña **CSV Diario** puedes:
-  - Generar CSV de cualquier fecha.
+  - Cambiar tipo de CSV (Resumen, Movimientos, Saldos).
+  - Generar CSV de cualquier fecha para ese tipo.
   - Ver historial de archivos.
   - Descargar cada archivo.
 
 Endpoints:
 
 ```bash
-GET /api/daily-csv?limit=120
-POST /api/daily-csv/generate   # body opcional: {"date":"YYYY-MM-DD"}
-GET /api/daily-csv/download?date=YYYY-MM-DD
+GET /api/daily-csv?limit=120&kind=summary|movements|balances
+POST /api/daily-csv/generate   # body opcional: {"date":"YYYY-MM-DD","kind":"summary|movements|balances"}
+GET /api/daily-csv/download?date=YYYY-MM-DD&kind=summary|movements|balances
 ```
 
 ## Operación (Fase 7)
