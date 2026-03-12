@@ -16,9 +16,11 @@ from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 ROOT_DIR = Path(__file__).resolve().parent
-DEFAULT_DB_PATH = ROOT_DIR / "data" / "cafeteria.db"
-DEFAULT_BACKUP_DIR = ROOT_DIR / "backups"
-DEFAULT_DAILY_CSV_DIR = ROOT_DIR / "daily_csv"
+PERSISTENT_ROOT = Path(os.getenv("PERSISTENT_DATA_ROOT", "/data"))
+USE_PERSISTENT_ROOT = PERSISTENT_ROOT.is_dir()
+DEFAULT_DB_PATH = (PERSISTENT_ROOT / "cafeteria.db") if USE_PERSISTENT_ROOT else (ROOT_DIR / "data" / "cafeteria.db")
+DEFAULT_BACKUP_DIR = (PERSISTENT_ROOT / "backups") if USE_PERSISTENT_ROOT else (ROOT_DIR / "backups")
+DEFAULT_DAILY_CSV_DIR = (PERSISTENT_ROOT / "daily_csv") if USE_PERSISTENT_ROOT else (ROOT_DIR / "daily_csv")
 
 DB_PATH = Path(os.getenv("DB_PATH", str(DEFAULT_DB_PATH)))
 BACKUP_DIR = Path(os.getenv("BACKUP_DIR", str(DEFAULT_BACKUP_DIR)))
@@ -47,6 +49,10 @@ CSV_KIND_EXPORT_PREFIX = {
     CSV_KIND_MOVEMENTS: "movimientos_cuenta",
     CSV_KIND_BALANCES: "saldos_cuenta",
 }
+
+
+def env_flag(name: str, default: str) -> bool:
+    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 PRODUCTS = {
@@ -193,7 +199,11 @@ def init_db() -> None:
         ).fetchone()
         seeded_defaults = bool(seeded_row and seeded_row["value"] == "1")
         count = conn.execute("SELECT COUNT(*) AS c FROM students").fetchone()["c"]
-        if count == 0 and not seeded_defaults:
+        is_persistent_path = str(DB_PATH).startswith("/data/")
+        # In persistent environments, never auto-seed dummy data unless explicitly enabled.
+        allow_default_seed = env_flag("ALLOW_DEFAULT_SEED", "0" if is_persistent_path else "1")
+
+        if count == 0 and not seeded_defaults and allow_default_seed:
             conn.executemany(
                 """
                 INSERT INTO students (name, grade, emoji, payment_type, family_id, initial_balance)
@@ -201,6 +211,15 @@ def init_db() -> None:
                 """,
                 DEFAULT_STUDENTS,
             )
+            conn.execute(
+                """
+                INSERT INTO app_meta (key, value)
+                VALUES ('seeded_defaults', '1')
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """
+            )
+        elif count == 0 and not allow_default_seed:
+            # Mark initialized to guarantee no future accidental dummy seed.
             conn.execute(
                 """
                 INSERT INTO app_meta (key, value)
@@ -1937,6 +1956,9 @@ def main() -> None:
 
     server = ThreadingHTTPServer((args.host, args.port), CafeteriaHandler)
     print(f"Cafetería lista en http://{args.host}:{args.port}")
+    print(f"DB_PATH={DB_PATH}")
+    print(f"BACKUP_DIR={BACKUP_DIR}")
+    print(f"DAILY_CSV_DIR={DAILY_CSV_DIR}")
     print("Presiona Ctrl+C para detener.")
     server.serve_forever()
 
