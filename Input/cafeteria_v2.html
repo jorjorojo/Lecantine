@@ -214,7 +214,7 @@ const api = {
     body: JSON.stringify(payload),
   }),
   deletePayment: (paymentId) => apiRequest(`/api/payments/${paymentId}`, { method: 'DELETE' }),
-  exportStatementCsv: async ({ start, end, paymentType, kind = 'summary' }) => {
+  exportStatementCsv: async ({ start, end, paymentType, kind = 'accounts' }) => {
     const params = new URLSearchParams();
     if (start) params.set('start', start);
     if (end) params.set('end', end);
@@ -232,12 +232,12 @@ const api = {
     }
     return await res.blob();
   },
-  listDailyCsv: (limit = 60, kind = 'summary') => apiRequest(`/api/daily-csv?limit=${encodeURIComponent(String(limit))}&kind=${encodeURIComponent(kind)}`),
-  generateDailyCsv: (date, kind = 'summary') => apiRequest('/api/daily-csv/generate', {
+  listDailyCsv: (limit = 60, kind = 'accounts') => apiRequest(`/api/daily-csv?limit=${encodeURIComponent(String(limit))}&kind=${encodeURIComponent(kind)}`),
+  generateDailyCsv: (date, kind = 'accounts') => apiRequest('/api/daily-csv/generate', {
     method: 'POST',
     body: JSON.stringify({ ...(date ? { date } : {}), kind }),
   }),
-  downloadDailyCsv: async (date, kind = 'summary') => {
+  downloadDailyCsv: async (date, kind = 'accounts') => {
     const params = new URLSearchParams();
     params.set('date', date);
     params.set('kind', kind);
@@ -251,7 +251,7 @@ const api = {
       throw new Error(msg);
     }
     const cd = res.headers.get('Content-Disposition') || '';
-    let filename = `estado_cuenta_${date}_all.csv`;
+    let filename = kind === 'orders' ? `pedidos_detalle_${date}.csv` : `cuentas_pagos_${date}.csv`;
     const match = cd.match(/filename=\"?([^\";]+)\"?/i);
     if (match && match[1]) filename = match[1];
     return { blob: await res.blob(), filename };
@@ -1014,7 +1014,7 @@ function StatementView({ orders, setOrders, students, payments, setPayments, onE
   const [expanded, setExpanded] = useState({});
   const [selectedForShare, setSelectedForShare] = useState({});
   const [viewMode, setViewMode] = useState('complete'); // complete | compact
-  const [csvKind, setCsvKind] = useState('summary'); // summary | movements | balances
+  const [csvKind, setCsvKind] = useState('accounts'); // accounts | orders
   const [payingFor, setPayingFor] = useState(null); // familyKey being paid
   const [editingPayment, setEditingPayment] = useState(null); // payment object being edited
   const [toast, setToast] = useState(null);
@@ -1177,11 +1177,7 @@ function StatementView({ orders, setOrders, students, payments, setPayments, onE
         paymentType: filterType,
         kind: csvKind,
       });
-      const filePrefix = csvKind === 'movements'
-        ? 'movimientos_cuenta'
-        : csvKind === 'balances'
-          ? 'saldos_cuenta'
-          : 'estado_cuenta';
+      const filePrefix = csvKind === 'orders' ? 'pedidos_detalle' : 'cuentas_pagos';
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -1190,7 +1186,7 @@ function StatementView({ orders, setOrders, students, payments, setPayments, onE
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      const kindLabel = csvKind === 'movements' ? 'movimientos' : csvKind === 'balances' ? 'saldos' : 'resumen';
+      const kindLabel = csvKind === 'orders' ? 'pedidos' : 'cuentas/pagos';
       setToast(`CSV ${kindLabel} descargado`);
       setTimeout(() => setToast(null), 3000);
     } catch (err) {
@@ -1273,9 +1269,8 @@ function StatementView({ orders, setOrders, students, payments, setPayments, onE
           />
           <SegmentedControl
             options={[
-              { value: 'summary', label: 'Resumen' },
-              { value: 'movements', label: 'Movimientos' },
-              { value: 'balances', label: 'Saldos' },
+              { value: 'accounts', label: 'Cuentas/Pagos' },
+              { value: 'orders', label: 'Pedidos' },
             ]}
             value={csvKind}
             onChange={setCsvKind}
@@ -1837,13 +1832,13 @@ function RegisterView({ students, setStudents }) {
 // ─── Daily CSV View ───
 function DailyCsvView() {
   const [selectedDate, setSelectedDate] = useState(getToday());
-  const [csvKind, setCsvKind] = useState('summary');
+  const [csvKind, setCsvKind] = useState('accounts');
   const [items, setItems] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [toast, setToast] = useState(null);
 
-  const kindLabel = csvKind === 'movements' ? 'Movimientos' : csvKind === 'balances' ? 'Saldos' : 'Resumen';
+  const kindLabel = csvKind === 'orders' ? 'Pedidos' : 'Cuentas/Pagos';
 
   const loadItems = useCallback(async () => {
     setIsLoading(true);
@@ -1918,12 +1913,11 @@ function DailyCsvView() {
 
       <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>🗂️ CSV Diario</h2>
       <div style={{ marginBottom: 10 }}>
-        <SegmentedControl
-          options={[
-            { value: 'summary', label: 'Resumen' },
-            { value: 'movements', label: 'Movimientos' },
-            { value: 'balances', label: 'Saldos' },
-          ]}
+          <SegmentedControl
+            options={[
+              { value: 'accounts', label: 'Cuentas/Pagos' },
+              { value: 'orders', label: 'Pedidos' },
+            ]}
           value={csvKind}
           onChange={setCsvKind}
         />

@@ -57,7 +57,7 @@ Prueba automatizada ejecutada (`RESULT: PASS`) con:
 Endpoint:
 
 ```bash
-GET /api/export.csv?start=YYYY-MM-DD&end=YYYY-MM-DD&paymentType=transfer|cole&kind=summary|movements|balances
+GET /api/export.csv?start=YYYY-MM-DD&end=YYYY-MM-DD&paymentType=transfer|cole&kind=accounts|orders
 ```
 
 Notas:
@@ -65,17 +65,18 @@ Notas:
 - `start` y `end` son obligatorias en uso normal desde UI (la UI ya las manda).
 - `paymentType` es opcional (`transfer` o `cole`).
 - `kind` define el CSV:
-  - `summary`: resumen por familia/alumno.
-  - `movements`: entradas/salidas por transacción (qué pidió cada alumno y pagos).
-  - `balances`: saldos por cuenta (inicial, entradas, salidas, saldo).
+  - `orders`: detalle de pedidos (quién pidió, qué pidió, cuánto y cuándo).
+  - `accounts`: estado de cuentas + pagos por familia/alumno.
+- Compatibilidad: `summary`, `movements` y `balances` se aceptan como alias legados.
 - Devuelve CSV descargable (UTF-8 con BOM para Excel).
 
 ## CSV diario (en la app)
 
 - La app guarda snapshots CSV diarios en `daily_csv/`.
-- Se generan automáticamente 3 archivos diarios (`summary`, `movements`, `balances`) al iniciar y después de cada cambio (pedido/pago/alumno).
+- Se generan automáticamente 2 archivos diarios (`orders`, `accounts`) al iniciar y después de cada cambio (pedido/pago/alumno).
+- Además, un scheduler los asegura en segundo plano cada pocos minutos.
 - Desde la pestaña **CSV Diario** puedes:
-  - Cambiar tipo de CSV (Resumen, Movimientos, Saldos).
+  - Cambiar tipo de CSV (Pedidos, Cuentas/Pagos).
   - Generar CSV de cualquier fecha para ese tipo.
   - Ver historial de archivos.
   - Descargar cada archivo.
@@ -83,9 +84,9 @@ Notas:
 Endpoints:
 
 ```bash
-GET /api/daily-csv?limit=120&kind=summary|movements|balances
-POST /api/daily-csv/generate   # body opcional: {"date":"YYYY-MM-DD","kind":"summary|movements|balances"}
-GET /api/daily-csv/download?date=YYYY-MM-DD&kind=summary|movements|balances
+GET /api/daily-csv?limit=120&kind=accounts|orders
+POST /api/daily-csv/generate   # body opcional: {"date":"YYYY-MM-DD","kind":"accounts|orders"}
+GET /api/daily-csv/download?date=YYYY-MM-DD&kind=accounts|orders
 ```
 
 ## Operación (Fase 7)

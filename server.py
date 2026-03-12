@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
@@ -35,19 +36,24 @@ APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Monterrey")
 HOURLY_BACKUP_RETENTION = 168
 DAILY_BACKUP_RETENTION = 90
 DAILY_CSV_RETENTION = 120
-CSV_KIND_SUMMARY = "summary"
-CSV_KIND_MOVEMENTS = "movements"
-CSV_KIND_BALANCES = "balances"
-CSV_KINDS = {CSV_KIND_SUMMARY, CSV_KIND_MOVEMENTS, CSV_KIND_BALANCES}
+DAILY_SNAPSHOT_INTERVAL_SECONDS = int(os.getenv("DAILY_SNAPSHOT_INTERVAL_SECONDS", "300"))
+CSV_KIND_ORDERS = "orders"
+CSV_KIND_ACCOUNTS = "accounts"
+CSV_KINDS = {CSV_KIND_ORDERS, CSV_KIND_ACCOUNTS}
+CSV_KIND_ALIASES = {
+    "summary": CSV_KIND_ACCOUNTS,
+    "balances": CSV_KIND_ACCOUNTS,
+    "movements": CSV_KIND_ORDERS,
+    "orders": CSV_KIND_ORDERS,
+    "accounts": CSV_KIND_ACCOUNTS,
+}
 CSV_KIND_DAILY_PREFIX = {
-    CSV_KIND_SUMMARY: "estado_resumen",
-    CSV_KIND_MOVEMENTS: "estado_movimientos",
-    CSV_KIND_BALANCES: "estado_saldos",
+    CSV_KIND_ORDERS: "pedidos_detalle",
+    CSV_KIND_ACCOUNTS: "cuentas_pagos",
 }
 CSV_KIND_EXPORT_PREFIX = {
-    CSV_KIND_SUMMARY: "estado_cuenta",
-    CSV_KIND_MOVEMENTS: "movimientos_cuenta",
-    CSV_KIND_BALANCES: "saldos_cuenta",
+    CSV_KIND_ORDERS: "pedidos_detalle",
+    CSV_KIND_ACCOUNTS: "cuentas_pagos",
 }
 
 
@@ -295,14 +301,14 @@ def maybe_daily_backup() -> Optional[Path]:
     return backup_path
 
 
-def daily_csv_path(date_value: str, kind: str = CSV_KIND_SUMMARY) -> Path:
+def daily_csv_path(date_value: str, kind: str = CSV_KIND_ACCOUNTS) -> Path:
     safe = validate_iso_date(date_value, "Fecha")
     safe_kind = normalize_csv_kind(kind)
     prefix = CSV_KIND_DAILY_PREFIX[safe_kind]
     return DAILY_CSV_DIR / f"{prefix}_{safe}.csv"
 
 
-def write_daily_csv_snapshot(date_value: str, kind: str = CSV_KIND_SUMMARY) -> Path:
+def write_daily_csv_snapshot(date_value: str, kind: str = CSV_KIND_ACCOUNTS) -> Path:
     target_date = validate_iso_date(date_value, "Fecha")
     csv_kind = normalize_csv_kind(kind)
     DAILY_CSV_DIR.mkdir(parents=True, exist_ok=True)
@@ -329,14 +335,14 @@ def write_daily_csv_snapshot(date_value: str, kind: str = CSV_KIND_SUMMARY) -> P
     return out_path
 
 
-def ensure_daily_csv_snapshot(date_value: str, kind: str = CSV_KIND_SUMMARY) -> Path:
+def ensure_daily_csv_snapshot(date_value: str, kind: str = CSV_KIND_ACCOUNTS) -> Path:
     out_path = daily_csv_path(date_value, kind)
     if out_path.exists():
         return out_path
     return write_daily_csv_snapshot(date_value, kind)
 
 
-def list_daily_csv_snapshots(limit: int = 60, kind: str = CSV_KIND_SUMMARY) -> list[dict]:
+def list_daily_csv_snapshots(limit: int = 60, kind: str = CSV_KIND_ACCOUNTS) -> list[dict]:
     csv_kind = normalize_csv_kind(kind)
     prefix = CSV_KIND_DAILY_PREFIX[csv_kind]
     DAILY_CSV_DIR.mkdir(parents=True, exist_ok=True)
@@ -369,6 +375,25 @@ def run_post_write_tasks(csv_dates: Optional[set[str]] = None) -> None:
             except Exception:
                 # Never fail the main write due to snapshot generation.
                 continue
+
+
+def start_daily_snapshot_scheduler() -> None:
+    interval = max(60, int(DAILY_SNAPSHOT_INTERVAL_SECONDS))
+
+    def loop():
+        while True:
+            try:
+                today = local_date()
+                maybe_daily_backup()
+                for kind in CSV_KINDS:
+                    ensure_daily_csv_snapshot(today, kind=kind)
+            except Exception:
+                # Keep service running even if snapshot generation fails transiently.
+                pass
+            time.sleep(interval)
+
+    t = threading.Thread(target=loop, name="daily-snapshot", daemon=True)
+    t.start()
 
 
 def backup_file_inventory(path: Path) -> dict:
@@ -569,6 +594,22 @@ def normalize_payment_type(value: Optional[str], field_name: str = "paymentType"
     return raw
 
 
+def normalize_student_identity_part(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
+def find_duplicate_student(conn: sqlite3.Connection, name: str, grade: str, exclude_id: Optional[int] = None):
+    n_name = normalize_student_identity_part(name)
+    n_grade = normalize_student_identity_part(grade)
+    rows = conn.execute("SELECT id, name, grade FROM students").fetchall()
+    for row in rows:
+        if exclude_id is not None and int(row["id"]) == int(exclude_id):
+            continue
+        if normalize_student_identity_part(row["name"]) == n_name and normalize_student_identity_part(row["grade"]) == n_grade:
+            return row
+    return None
+
+
 def normalize_cart(cart: list) -> tuple[list, float]:
     if not isinstance(cart, list) or len(cart) == 0:
         raise ValueError("El carrito está vacío.")
@@ -603,11 +644,12 @@ def week_range_from_date(date_value: dt.date) -> tuple[str, str]:
 
 
 def normalize_csv_kind(value: Optional[str], field_name: str = "kind") -> str:
-    raw = CSV_KIND_SUMMARY if value is None else str(value).strip().lower()
-    if raw not in CSV_KINDS:
+    raw = CSV_KIND_ACCOUNTS if value is None else str(value).strip().lower()
+    canonical = CSV_KIND_ALIASES.get(raw)
+    if canonical not in CSV_KINDS:
         valid = ", ".join(sorted(CSV_KINDS))
         raise ValueError(f"{field_name} inválido. Usa: {valid}.")
-    return raw
+    return canonical
 
 
 def filter_students_by_payment_type(students: list, payment_type: Optional[str]) -> list:
@@ -622,6 +664,213 @@ def group_students_by_family(students_filtered: list) -> dict[str, list]:
         key = student_family_key(s["id"], s.get("familyId"))
         family_groups.setdefault(key, []).append(s)
     return family_groups
+
+
+def build_orders_detail_csv(
+    students: list,
+    orders: list,
+    payments: list,
+    start_date: str,
+    end_date: str,
+    payment_type: Optional[str] = None,
+) -> str:
+    students_filtered = filter_students_by_payment_type(students, payment_type)
+    student_map = {s["id"]: s for s in students_filtered}
+
+    rows: list[dict] = []
+    for order in orders:
+        if not (start_date <= order["date"] <= end_date):
+            continue
+        student = student_map.get(order["studentId"])
+        if not student:
+            continue
+        family_key = student_family_key(student["id"], student.get("familyId"))
+        family_id = student.get("familyId") or ""
+        order_total = round(float(order.get("total", 0) or 0), 2)
+        for item in order.get("items", []):
+            qty = int(item.get("qty", 0) or 0)
+            unit_price = round(float(item.get("unitPrice", 0) or 0), 2)
+            line_total = round(qty * unit_price, 2)
+            product_id = int(item.get("productId", 0) or 0)
+            product_name = PRODUCTS.get(product_id, {}).get("name", f"Producto {product_id}")
+            rows.append(
+                {
+                    "date": order["date"],
+                    "time": order.get("time") or "",
+                    "orderId": order["id"],
+                    "studentId": student["id"],
+                    "studentName": student["name"],
+                    "grade": student["grade"],
+                    "paymentType": student.get("paymentType") or "",
+                    "familyKey": family_key,
+                    "familyId": family_id,
+                    "productId": product_id,
+                    "productName": product_name,
+                    "qty": qty,
+                    "unitPrice": f"{unit_price:.2f}",
+                    "lineTotal": f"{line_total:.2f}",
+                    "orderTotal": f"{order_total:.2f}",
+                }
+            )
+
+    rows.sort(key=lambda r: (r["date"], r["time"] or "99:99", r["orderId"], r["productId"]))
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "fecha",
+            "hora",
+            "order_id",
+            "student_id",
+            "student_name",
+            "grade",
+            "payment_type",
+            "family_key",
+            "family_id",
+            "product_id",
+            "product_name",
+            "qty",
+            "unit_price",
+            "line_total",
+            "order_total",
+        ]
+    )
+    for r in rows:
+        writer.writerow(
+            [
+                r["date"],
+                r["time"],
+                r["orderId"],
+                r["studentId"],
+                r["studentName"],
+                r["grade"],
+                r["paymentType"],
+                r["familyKey"],
+                r["familyId"],
+                r["productId"],
+                r["productName"],
+                r["qty"],
+                r["unitPrice"],
+                r["lineTotal"],
+                r["orderTotal"],
+            ]
+        )
+    return output.getvalue()
+
+
+def build_accounts_payments_csv(
+    students: list,
+    orders: list,
+    payments: list,
+    start_date: str,
+    end_date: str,
+    payment_type: Optional[str] = None,
+) -> str:
+    students_filtered = filter_students_by_payment_type(students, payment_type)
+    family_groups = group_students_by_family(students_filtered)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "scope",
+            "family_key",
+            "family_id",
+            "students",
+            "payment_type",
+            "period_start",
+            "period_end",
+            "initial_balance",
+            "payments_period",
+            "orders_period",
+            "net_period",
+            "balance_total",
+            "movement_date",
+            "movement_type",
+            "movement_id",
+            "method",
+            "note",
+            "amount_in",
+            "amount_out",
+        ]
+    )
+
+    for family_key in sorted(family_groups.keys()):
+        members = family_groups[family_key]
+        member_ids = {m["id"] for m in members}
+        family_id = members[0].get("familyId") or ""
+        members_text = " / ".join(sorted(m["name"] for m in members))
+        member_types = sorted({m["paymentType"] for m in members})
+        payment_type_value = member_types[0] if len(member_types) == 1 else "mixed"
+
+        initial_sum = round(sum(float(m.get("initialBalance", 0) or 0) for m in members), 2)
+        payments_period = round(
+            sum(p["amount"] for p in payments if p["familyKey"] == family_key and start_date <= p["date"] <= end_date),
+            2,
+        )
+        orders_period = round(
+            sum(o["total"] for o in orders if o["studentId"] in member_ids and start_date <= o["date"] <= end_date),
+            2,
+        )
+        net_period = round(payments_period - orders_period, 2)
+        payments_total = round(sum(p["amount"] for p in payments if p["familyKey"] == family_key), 2)
+        orders_total = round(sum(o["total"] for o in orders if o["studentId"] in member_ids), 2)
+        balance_total = round(initial_sum + payments_total - orders_total, 2)
+
+        writer.writerow(
+            [
+                "summary",
+                family_key,
+                family_id,
+                members_text,
+                payment_type_value,
+                start_date,
+                end_date,
+                f"{initial_sum:.2f}",
+                f"{payments_period:.2f}",
+                f"{orders_period:.2f}",
+                f"{net_period:.2f}",
+                f"{balance_total:.2f}",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]
+        )
+
+        period_payments = [
+            p for p in payments if p["familyKey"] == family_key and start_date <= p["date"] <= end_date
+        ]
+        for p in sorted(period_payments, key=lambda x: (x["date"], x["id"])):
+            writer.writerow(
+                [
+                    "payment",
+                    family_key,
+                    family_id,
+                    members_text,
+                    payment_type_value,
+                    start_date,
+                    end_date,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    p["date"],
+                    "pago",
+                    p["id"],
+                    p.get("method") or "",
+                    p.get("note") or "",
+                    f"{float(p.get('amount', 0) or 0):.2f}",
+                    "",
+                ]
+            )
+
+    return output.getvalue()
 
 
 def build_statement_csv(
@@ -980,12 +1229,10 @@ def build_export_csv(
     end_date: str,
     payment_type: Optional[str] = None,
 ) -> str:
-    if kind == CSV_KIND_SUMMARY:
-        return build_statement_csv(students, orders, payments, start_date, end_date, payment_type)
-    if kind == CSV_KIND_MOVEMENTS:
-        return build_movements_csv(students, orders, payments, start_date, end_date, payment_type)
-    if kind == CSV_KIND_BALANCES:
-        return build_balances_csv(students, orders, payments, start_date, end_date, payment_type)
+    if kind == CSV_KIND_ORDERS:
+        return build_orders_detail_csv(students, orders, payments, start_date, end_date, payment_type)
+    if kind == CSV_KIND_ACCOUNTS:
+        return build_accounts_payments_csv(students, orders, payments, start_date, end_date, payment_type)
     valid = ", ".join(sorted(CSV_KINDS))
     raise ValueError(f"kind inválido. Usa: {valid}.")
 
@@ -1514,6 +1761,11 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
 
         with WRITE_LOCK:
             with db_connection() as conn:
+                dup = find_duplicate_student(conn, name=name, grade=grade)
+                if dup:
+                    raise ValueError(
+                        f"Ya existe un alumno con el mismo nombre y grado/grupo: {dup['name']} ({dup['grade']})."
+                    )
                 cur = conn.execute(
                     """
                     INSERT INTO students (name, grade, emoji, payment_type, family_id, initial_balance)
@@ -1604,6 +1856,12 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                         raise ValueError("Saldo inicial inválido.")
                 else:
                     initial_balance = float(current["initial_balance"])
+
+                dup = find_duplicate_student(conn, name=name, grade=grade, exclude_id=student_id)
+                if dup:
+                    raise ValueError(
+                        f"Ya existe un alumno con el mismo nombre y grado/grupo: {dup['name']} ({dup['grade']})."
+                    )
 
                 conn.execute(
                     """
@@ -1965,6 +2223,7 @@ def main() -> None:
         print(f"Backup creado: {backup_path}")
         return
 
+    start_daily_snapshot_scheduler()
     server = ThreadingHTTPServer((args.host, args.port), CafeteriaHandler)
     print(f"Cafetería lista en http://{args.host}:{args.port}")
     print(f"DB_PATH={DB_PATH}")
