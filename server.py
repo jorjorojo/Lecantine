@@ -325,6 +325,72 @@ def run_post_write_tasks(csv_dates: Optional[set[str]] = None) -> None:
             continue
 
 
+def backup_file_inventory(path: Path) -> dict:
+    st = path.stat()
+    item = {
+        "filename": path.name,
+        "sizeBytes": st.st_size,
+        "updatedAt": dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc).isoformat(),
+    }
+    try:
+        with sqlite3.connect(path) as conn:
+            students_count = conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+            orders_count = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+            payments_count = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+            min_order_date = conn.execute("SELECT MIN(order_date) FROM orders").fetchone()[0]
+            max_order_date = conn.execute("SELECT MAX(order_date) FROM orders").fetchone()[0]
+        item.update(
+            {
+                "students": int(students_count or 0),
+                "orders": int(orders_count or 0),
+                "payments": int(payments_count or 0),
+                "minOrderDate": min_order_date,
+                "maxOrderDate": max_order_date,
+            }
+        )
+    except Exception as exc:
+        item["error"] = str(exc)
+    return item
+
+
+def list_db_backups(limit: int = 50) -> list[dict]:
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    files = sorted(BACKUP_DIR.glob("cafeteria*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    rows: list[dict] = []
+    for p in files[: max(1, limit)]:
+        rows.append(backup_file_inventory(p))
+    return rows
+
+
+def restore_backup(filename: str) -> dict:
+    safe_name = str(filename).strip()
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", safe_name):
+        raise ValueError("Nombre de backup inválido.")
+    backup_path = BACKUP_DIR / safe_name
+    if not backup_path.exists() or not backup_path.is_file():
+        raise ValueError("Backup no encontrado.")
+
+    with WRITE_LOCK:
+        safety_backup = force_backup() if DB_PATH.exists() else None
+        with sqlite3.connect(backup_path) as source:
+            with sqlite3.connect(DB_PATH) as target:
+                source.backup(target)
+        maybe_daily_backup()
+        ensure_daily_csv_snapshot(local_date())
+        with db_connection() as conn:
+            students = conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+            orders = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+            payments = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+
+    return {
+        "restoredFrom": backup_path.name,
+        "safetyBackup": safety_backup.name if safety_backup else None,
+        "students": int(students or 0),
+        "orders": int(orders or 0),
+        "payments": int(payments or 0),
+    }
+
+
 def row_to_student(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
@@ -699,6 +765,16 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 self.send_json(500, {"error": "Error interno del servidor."})
                 return
 
+        if parsed.path == "/api/admin/backups":
+            try:
+                return self.handle_list_backups(parsed)
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            except Exception:
+                self.send_json(500, {"error": "Error interno del servidor."})
+                return
+
         return super().do_GET()
 
     def do_POST(self):
@@ -714,6 +790,8 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
                 return self.handle_create_payment()
             if parsed.path == "/api/daily-csv/generate":
                 return self.handle_generate_daily_csv()
+            if parsed.path == "/api/admin/restore":
+                return self.handle_restore_backup()
             self.send_json(404, {"error": "Ruta no encontrada."})
         except ValueError as exc:
             self.send_json(400, {"error": str(exc)})
@@ -872,6 +950,38 @@ class CafeteriaHandler(SimpleHTTPRequestHandler):
         target_date = validate_iso_date(str(date_raw), "Fecha")
         out_path = ensure_daily_csv_snapshot(target_date)
         self.send_file(200, out_path, download_name=out_path.name)
+
+    def handle_list_backups(self, parsed_url) -> None:
+        query = parse_qs(parsed_url.query or "")
+        limit_raw = query.get("limit", [None])[0]
+        if limit_raw is None or str(limit_raw).strip() == "":
+            limit = 30
+        else:
+            try:
+                limit = int(str(limit_raw))
+            except ValueError:
+                raise ValueError("limit inválido.")
+            if limit <= 0 or limit > 200:
+                raise ValueError("limit fuera de rango (1-200).")
+
+        rows = list_db_backups(limit=limit)
+        self.send_json(
+            200,
+            {
+                "dbPath": str(DB_PATH),
+                "backupDir": str(BACKUP_DIR),
+                "items": rows,
+                "count": len(rows),
+            },
+        )
+
+    def handle_restore_backup(self) -> None:
+        payload = self.read_json_body()
+        filename = str(payload.get("filename", "")).strip()
+        if not filename:
+            raise ValueError("filename es obligatorio.")
+        result = restore_backup(filename)
+        self.send_json(200, {"ok": True, **result})
 
     def handle_create_order(self):
         payload = self.read_json_body()
