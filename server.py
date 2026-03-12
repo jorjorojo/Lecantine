@@ -47,7 +47,7 @@ PRODUCTS = {
     14: {"name": "Chilaquiles sencillos (sin pollo)", "price": 45.0},
     15: {"name": "Spaghetti a la boloñesa", "price": 55.0},
     16: {"name": "Pan pita con carne", "price": 70.0},
-    17: {"name": "Pan pita con pollo", "price": 70.0},
+    17: {"name": "Pan pita", "price": 70.0},
     18: {"name": "Bolipizza", "price": 50.0},
     19: {"name": "Vaso de verduras (pepino, zanahoria, jícama)", "price": 18.0},
     20: {"name": "Bolsa de palomitas", "price": 15.0},
@@ -64,12 +64,18 @@ PRODUCTS = {
     31: {"name": "Barra de granola", "price": 20.0},
     32: {"name": "Leche Santa Clara fresa", "price": 20.0},
     33: {"name": "Leche Santa Clara chocolate", "price": 20.0},
-    34: {"name": "Congelada / boli de jugo natural", "price": 20.0},
+    34: {"name": "Congelada / boli de jugo natural", "price": 15.0},
     35: {"name": "Jugo natural tetra pack", "price": 18.0},
     36: {"name": "Botella de agua natural (½ litro)", "price": 10.0},
     37: {"name": "Botella de agua natural (1 litro)", "price": 18.0},
     38: {"name": "Botella de agua de sabor (½ litro)", "price": 16.0},
     39: {"name": "Botella de agua de sabor (1 litro)", "price": 24.0},
+    40: {"name": "Tacos de arrachera", "price": 25.0},
+    41: {"name": "Molletes", "price": 50.0},
+    42: {"name": "Galletas integral", "price": 15.0},
+    43: {"name": "Obleas integral", "price": 10.0},
+    44: {"name": "Obleas amaranto", "price": 5.0},
+    45: {"name": "Cuerpo de amaranto", "price": 20.0},
 }
 
 

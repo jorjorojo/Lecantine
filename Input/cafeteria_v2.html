@@ -63,10 +63,10 @@ const CATEGORIES = [
 const PRODUCTS = [
   { id: 1, name: "Torta de arrachera", price: 60, cat: "comida" },
   { id: 2, name: "Torta de jamón", price: 60, cat: "comida" },
-  { id: 3, name: "Torta de pechuga de pavo", price: 60, cat: "comida" },
-  { id: 4, name: "Torta de huevo", price: 60, cat: "comida" },
+  { id: 3, name: "Torta de pechuga de pavo", price: 60, cat: "comida", active: false },
+  { id: 4, name: "Torta de huevo", price: 60, cat: "comida", active: false },
   { id: 5, name: "Torta de pollo deshebrado", price: 60, cat: "comida" },
-  { id: 6, name: "Torta de pollo (con mayonesa)", price: 55, cat: "comida" },
+  { id: 6, name: "Torta de pollo (con mayonesa)", price: 55, cat: "comida", active: false },
   { id: 7, name: "Gringa de arrachera", price: 50, cat: "comida" },
   { id: 8, name: "Sincronizada de jamón / pechuga de pavo", price: 45, cat: "comida" },
   { id: 9, name: "Sándwich de pollo deshebrado", price: 45, cat: "comida" },
@@ -77,8 +77,10 @@ const PRODUCTS = [
   { id: 14, name: "Chilaquiles sencillos (sin pollo)", price: 45, cat: "comida" },
   { id: 15, name: "Spaghetti a la boloñesa", price: 55, cat: "comida" },
   { id: 16, name: "Pan pita con carne", price: 70, cat: "comida" },
-  { id: 17, name: "Pan pita con pollo", price: 70, cat: "comida" },
+  { id: 17, name: "Pan pita", price: 70, cat: "comida" },
   { id: 18, name: "Bolipizza", price: 50, cat: "comida" },
+  { id: 40, name: "Tacos de arrachera", price: 25, cat: "comida" },
+  { id: 41, name: "Molletes", price: 50, cat: "comida" },
   { id: 19, name: "Vaso de verduras (pepino, zanahoria, jícama)", price: 18, cat: "dulces" },
   { id: 20, name: "Bolsa de palomitas", price: 15, cat: "dulces" },
   { id: 21, name: "Bolsa de cacahuate natural", price: 15, cat: "dulces" },
@@ -92,9 +94,13 @@ const PRODUCTS = [
   { id: 29, name: "Garbanzos enchilados", price: 15, cat: "dulces" },
   { id: 30, name: "Maicitos enchilados", price: 15, cat: "dulces" },
   { id: 31, name: "Barra de granola", price: 20, cat: "dulces" },
+  { id: 42, name: "Galletas integral", price: 15, cat: "dulces" },
+  { id: 43, name: "Obleas integral", price: 10, cat: "dulces" },
+  { id: 44, name: "Obleas amaranto", price: 5, cat: "dulces" },
+  { id: 45, name: "Cuerpo de amaranto", price: 20, cat: "dulces" },
   { id: 32, name: "Leche Santa Clara fresa", price: 20, cat: "bebidas" },
   { id: 33, name: "Leche Santa Clara chocolate", price: 20, cat: "bebidas" },
-  { id: 34, name: "Congelada / boli de jugo natural", price: 20, cat: "bebidas" },
+  { id: 34, name: "Congelada / boli de jugo natural", price: 15, cat: "bebidas" },
   { id: 35, name: "Jugo natural tetra pack", price: 18, cat: "bebidas" },
   { id: 36, name: "Botella de agua natural (½ litro)", price: 10, cat: "bebidas" },
   { id: 37, name: "Botella de agua natural (1 litro)", price: 18, cat: "bebidas" },
@@ -564,6 +570,7 @@ function MenuSection({ cart, setCart }) {
 
   const filtered = useMemo(() => {
     let items = PRODUCTS;
+    items = items.filter(p => p.active !== false);
     if (activeCat !== 'all') items = items.filter(p => p.cat === activeCat);
     if (search.trim()) {
       const q = search.toLowerCase();
