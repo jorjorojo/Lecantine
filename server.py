@@ -55,6 +55,10 @@ def env_flag(name: str, default: str) -> bool:
     return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def running_on_railway() -> bool:
+    return any(k.startswith("RAILWAY_") for k in os.environ.keys())
+
+
 PRODUCTS = {
     1: {"name": "Torta de arrachera", "price": 60.0},
     2: {"name": "Torta de jamón", "price": 60.0},
@@ -1943,6 +1947,13 @@ def main() -> None:
             DAILY_CSV_DIR = ROOT_DIR / DAILY_CSV_DIR
     else:
         DAILY_CSV_DIR = DB_PATH.parent / "daily_csv"
+
+    require_persistent_storage = env_flag("REQUIRE_PERSISTENT_STORAGE", "1" if running_on_railway() else "0")
+    if require_persistent_storage and not str(DB_PATH).startswith("/data/"):
+        raise RuntimeError(
+            f"Configuración insegura en producción: DB_PATH={DB_PATH}. "
+            "Debe apuntar a /data/cafeteria.db para evitar pérdida/corrupción de datos."
+        )
 
     init_db()
     maybe_daily_backup()
